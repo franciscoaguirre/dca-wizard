@@ -48,6 +48,18 @@ export interface DcaWizardInputs {
 }
 
 /**
+ * Scheduler call input parameters
+ */
+export interface SchedulerCallInput {
+  after: number;
+  maybe_periodic: {
+    period: number;
+    repetitions: number;
+  } | null;
+  priority: number;
+}
+
+/**
  * Calculated values and estimates
  */
 export interface DcaCalculations {
@@ -72,11 +84,11 @@ export interface DcaProposal {
     treasurySpend: XcmVersionedXcm;
     dcaSchedule: Array<{
       stablecoin: 'USDT' | 'USDC';
-      schedulerCall: any;
+      schedulerCall: SchedulerCallInput;
       xcmCall: XcmVersionedXcm;
     }>;
     periodicReturn: {
-      schedulerCall: any;
+      schedulerCall: SchedulerCallInput;
       xcmCall: XcmVersionedXcm;
     };
   };
@@ -91,10 +103,7 @@ export interface DcaProposal {
 /**
  * Calculate fee estimate for the entire operation
  */
-function calculateTotalFees(
-  _dotAmount: bigint,
-  numberOfReturns: number
-): bigint {
+function calculateTotalFees(numberOfReturns: number): bigint {
   // Conservative fee estimates:
   // - Initial transfer to Hydration: 0.1 DOT
   // - DCA setup per schedule: 0.05 DOT
@@ -159,7 +168,7 @@ function validateInputs(inputs: DcaWizardInputs): { valid: boolean; errors: stri
 /**
  * Generate warnings for user consideration
  */
-function generateWarnings(inputs: DcaWizardInputs, _calculations: DcaCalculations): string[] {
+function generateWarnings(inputs: DcaWizardInputs): string[] {
   const warnings: string[] = [];
 
   // Warn if DCA trades are very frequent
@@ -222,7 +231,7 @@ export async function buildDcaProposal(
 
   // Calculate sovereign account for Collectives parachain
   const collectivesParaId = getParachainId(inputs.network, 'COLLECTIVES');
-  const sovereignAccount = calculateSovereignAccount(inputs.network, collectivesParaId);
+  const sovereignAccount = calculateSovereignAccount(collectivesParaId);
 
   // Calculate DCA parameters
   const totalTrades = calculateTotalTrades(inputs.dcaDurationDays, inputs.dcaFrequencyBlocks);
@@ -236,7 +245,7 @@ export async function buildDcaProposal(
   );
 
   // Calculate fees
-  const feeEstimate = calculateTotalFees(inputs.dotAmount, inputs.numberOfReturns);
+  const feeEstimate = calculateTotalFees(inputs.numberOfReturns);
 
   // Calculate periodic return parameters
   const periodicReturnSchedule = calculatePeriodicReturnParams(
@@ -301,15 +310,16 @@ export async function buildDcaProposal(
   );
 
   // 3. Periodic return - schedule periodic transfers back to Asset Hub
-  const periodicReturnFee = estimatePeriodicReturnFee(inputs.network);
+  const periodicReturnFee = estimatePeriodicReturnFee();
   const periodicReturn = buildPeriodicReturnSchedulerCall(
     inputs.network,
     periodicReturnSchedule,
-    periodicReturnFee
+    periodicReturnFee,
+    inputs.treasurySplitPercent
   );
 
   // Generate warnings
-  const warnings = generateWarnings(inputs, calculations);
+  const warnings = generateWarnings(inputs);
 
   return {
     inputs,
@@ -350,6 +360,10 @@ export async function encodeBatchCall(
   });
 
   // 1. Treasury Spend - Send DOT to Hydration
+  // NOTE: The treasury has an associated account (ACCOUNTS.TREASURY) that holds funds.
+  // Using dispatch_as with Signed origin is valid because this call will be executed
+  // via a referendum with Root origin, which has permission to dispatch_as any account.
+  // The referendum's Root origin grants the authority to act on behalf of the treasury account.
   const treasuryCall = ahApi.tx.Utility.dispatch_as({
     as_origin: Enum('system', DispatchRawOrigin.Signed(ACCOUNTS.TREASURY)),
     call: ahApi.tx.PolkadotXcm.execute({
@@ -372,11 +386,15 @@ export async function encodeBatchCall(
   );
 
   // 3. Schedule Periodic Returns
+  const { schedulerCall } = proposal.calls.periodicReturn;
+  if (!schedulerCall.maybe_periodic) {
+    throw new Error('Periodic return schedulerCall must have maybe_periodic defined');
+  }
   const periodicCall = ahApi.tx.Scheduler.schedule_after({
-    after: proposal.calls.periodicReturn.schedulerCall.after,
+    after: schedulerCall.after,
     maybe_periodic: [
-      proposal.calls.periodicReturn.schedulerCall.maybe_periodic.period,
-      proposal.calls.periodicReturn.schedulerCall.maybe_periodic.repetitions,
+      schedulerCall.maybe_periodic.period,
+      schedulerCall.maybe_periodic.repetitions,
     ],
     priority: 128,
     call: ahApi.tx.PolkadotXcm.send({

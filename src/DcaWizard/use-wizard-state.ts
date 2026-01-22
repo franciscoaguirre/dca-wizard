@@ -93,59 +93,80 @@ const initialState: WizardState = {
 };
 
 /**
+ * Type-safe field accessor for WizardState
+ */
+type ValidatableField = 'dotAmount' | 'dcaFrequencyBlocks' | 'dcaDurationDays' | 'slippagePercent' | 'numberOfReturns' | 'treasurySplitPercent' | 'salarySplitPercent';
+
+function getFieldValue(state: WizardState, field: ValidatableField): WizardState[ValidatableField] {
+  return state[field];
+}
+
+/**
  * Validate individual field
  */
-function validateField(field: string, value: any, state: WizardState): string | null {
+function validateField(field: string, value: WizardState[ValidatableField], state: WizardState): string | null {
   switch (field) {
-    case 'dotAmount':
-      if (!value || value === '') {
+    case 'dotAmount': {
+      const strValue = value as string;
+      if (!strValue || strValue === '') {
         return 'DOT amount is required';
       }
       try {
-        const amount = parseDotAmount(value);
+        const amount = parseDotAmount(strValue);
         if (amount <= 0n) {
           return 'DOT amount must be greater than 0';
         }
         if (amount < VALIDATION.MIN_DOT_AMOUNT) {
           return `Minimum DOT amount is ${Number(VALIDATION.MIN_DOT_AMOUNT) / 1e10} DOT`;
         }
-      } catch (e) {
+      } catch {
         return 'Invalid DOT amount format';
       }
       return null;
+    }
 
-    case 'dcaFrequencyBlocks':
-      if (value < VALIDATION.MIN_DCA_FREQUENCY_BLOCKS) {
+    case 'dcaFrequencyBlocks': {
+      const numValue = value as number;
+      if (numValue < VALIDATION.MIN_DCA_FREQUENCY_BLOCKS) {
         return `Minimum DCA frequency is ${VALIDATION.MIN_DCA_FREQUENCY_BLOCKS} blocks`;
       }
       return null;
+    }
 
-    case 'dcaDurationDays':
-      if (value <= 0) {
+    case 'dcaDurationDays': {
+      const numValue = value as number;
+      if (numValue <= 0) {
         return 'DCA duration must be greater than 0 days';
       }
       return null;
+    }
 
-    case 'slippagePercent':
-      if (value < 0.1 || value > 10) {
+    case 'slippagePercent': {
+      const numValue = value as number;
+      if (numValue < 0.1 || numValue > 10) {
         return 'Slippage must be between 0.1% and 10%';
       }
       return null;
+    }
 
-    case 'numberOfReturns':
-      if (value < VALIDATION.MIN_RETURNS || value > VALIDATION.MAX_RETURNS) {
+    case 'numberOfReturns': {
+      const numValue = value as number;
+      if (numValue < VALIDATION.MIN_RETURNS || numValue > VALIDATION.MAX_RETURNS) {
         return `Number of returns must be between ${VALIDATION.MIN_RETURNS} and ${VALIDATION.MAX_RETURNS}`;
       }
       return null;
+    }
 
     case 'treasurySplitPercent':
-    case 'salarySplitPercent':
-      const treasuryPercent = field === 'treasurySplitPercent' ? value : state.treasurySplitPercent;
-      const salaryPercent = field === 'salarySplitPercent' ? value : state.salarySplitPercent;
+    case 'salarySplitPercent': {
+      const numValue = value as number;
+      const treasuryPercent = field === 'treasurySplitPercent' ? numValue : state.treasurySplitPercent;
+      const salaryPercent = field === 'salarySplitPercent' ? numValue : state.salarySplitPercent;
       if (treasuryPercent + salaryPercent !== 100) {
         return 'Treasury and salary percentages must sum to 100';
       }
       return null;
+    }
 
     default:
       return null;
@@ -158,7 +179,7 @@ function validateField(field: string, value: any, state: WizardState): string | 
 function validateAllFields(state: WizardState): Record<string, string> {
   const errors: Record<string, string> = {};
 
-  const fields = [
+  const fields: ValidatableField[] = [
     'dotAmount',
     'dcaFrequencyBlocks',
     'dcaDurationDays',
@@ -168,13 +189,30 @@ function validateAllFields(state: WizardState): Record<string, string> {
   ];
 
   for (const field of fields) {
-    const error = validateField(field, (state as any)[field], state);
+    const error = validateField(field, getFieldValue(state, field), state);
     if (error) {
       errors[field] = error;
     }
   }
 
   return errors;
+}
+
+/**
+ * Helper to update a field with validation
+ */
+function updateFieldWithValidation<K extends ValidatableField>(
+  state: WizardState,
+  field: K,
+  value: WizardState[K]
+): WizardState {
+  const error = validateField(field, value, state);
+  const { [field]: _, ...restErrors } = state.errors;
+  return {
+    ...state,
+    [field]: value,
+    errors: error ? { ...restErrors, [field]: error } : restErrors,
+  };
 }
 
 /**
@@ -186,75 +224,35 @@ function wizardReducer(state: WizardState, action: WizardAction): WizardState {
       return { ...state, network: action.payload };
 
     case 'SET_DOT_AMOUNT':
-      const dotError = validateField('dotAmount', action.payload, state);
-      const { dotAmount: _oldDotError, ...restErrorsAfterDot } = state.errors;
-      return {
-        ...state,
-        dotAmount: action.payload,
-        errors: dotError ? { ...restErrorsAfterDot, dotAmount: dotError } : restErrorsAfterDot,
-      };
+      return updateFieldWithValidation(state, 'dotAmount', action.payload);
 
     case 'SET_STABLECOIN':
       return { ...state, stablecoin: action.payload };
 
     case 'SET_DCA_FREQUENCY':
-      const freqError = validateField('dcaFrequencyBlocks', action.payload, state);
-      const { dcaFrequencyBlocks: _oldFreqError, ...restErrorsAfterFreq } = state.errors;
-      return {
-        ...state,
-        dcaFrequencyBlocks: action.payload,
-        errors: freqError ? { ...restErrorsAfterFreq, dcaFrequencyBlocks: freqError } : restErrorsAfterFreq,
-      };
+      return updateFieldWithValidation(state, 'dcaFrequencyBlocks', action.payload);
 
     case 'SET_DCA_DURATION':
-      const durationError = validateField('dcaDurationDays', action.payload, state);
-      const { dcaDurationDays: _oldDurationError, ...restErrorsAfterDuration } = state.errors;
-      return {
-        ...state,
-        dcaDurationDays: action.payload,
-        errors: durationError ? { ...restErrorsAfterDuration, dcaDurationDays: durationError } : restErrorsAfterDuration,
-      };
+      return updateFieldWithValidation(state, 'dcaDurationDays', action.payload);
 
     case 'SET_SLIPPAGE':
-      const slippageError = validateField('slippagePercent', action.payload, state);
-      const { slippagePercent: _oldSlippageError, ...restErrorsAfterSlippage } = state.errors;
-      return {
-        ...state,
-        slippagePercent: action.payload,
-        errors: slippageError ? { ...restErrorsAfterSlippage, slippagePercent: slippageError } : restErrorsAfterSlippage,
-      };
+      return updateFieldWithValidation(state, 'slippagePercent', action.payload);
 
     case 'SET_RETURN_FREQUENCY':
       return { ...state, returnFrequencyDays: action.payload };
 
     case 'SET_NUMBER_OF_RETURNS':
-      const returnsError = validateField('numberOfReturns', action.payload, state);
-      const { numberOfReturns: _oldReturnsError, ...restErrorsAfterReturns } = state.errors;
-      return {
-        ...state,
-        numberOfReturns: action.payload,
-        errors: returnsError ? { ...restErrorsAfterReturns, numberOfReturns: returnsError } : restErrorsAfterReturns,
-      };
+      return updateFieldWithValidation(state, 'numberOfReturns', action.payload);
 
-    case 'SET_TREASURY_SPLIT':
-      const treasuryError = validateField('treasurySplitPercent', action.payload, state);
-      const { treasurySplitPercent: _oldTreasuryError, ...restErrorsAfterTreasury } = state.errors;
-      return {
-        ...state,
-        treasurySplitPercent: action.payload,
-        salarySplitPercent: 100 - action.payload,
-        errors: treasuryError ? { ...restErrorsAfterTreasury, treasurySplitPercent: treasuryError } : restErrorsAfterTreasury,
-      };
+    case 'SET_TREASURY_SPLIT': {
+      const updated = updateFieldWithValidation(state, 'treasurySplitPercent', action.payload);
+      return { ...updated, salarySplitPercent: 100 - action.payload };
+    }
 
-    case 'SET_SALARY_SPLIT':
-      const salaryError = validateField('salarySplitPercent', action.payload, state);
-      const { salarySplitPercent: _oldSalaryError, ...restErrorsAfterSalary } = state.errors;
-      return {
-        ...state,
-        salarySplitPercent: action.payload,
-        treasurySplitPercent: 100 - action.payload,
-        errors: salaryError ? { ...restErrorsAfterSalary, salarySplitPercent: salaryError } : restErrorsAfterSalary,
-      };
+    case 'SET_SALARY_SPLIT': {
+      const updated = updateFieldWithValidation(state, 'salarySplitPercent', action.payload);
+      return { ...updated, treasurySplitPercent: 100 - action.payload };
+    }
 
     case 'SET_DOT_PRICE':
       return { ...state, dotPriceUsd: action.payload };

@@ -1,21 +1,18 @@
 /**
  * Hydration chain client
  * Handles connections and operations for Hydration parachain
- * Uses smoldot light client with webworker
+ * Uses shared smoldot light client instance
  */
 
 import { createClient } from 'polkadot-api';
 import { getSmProvider } from 'polkadot-api/sm-provider';
-import { startFromWorker } from 'polkadot-api/smoldot/from-worker';
-import SmWorker from 'polkadot-api/smoldot/worker?worker';
-import { polkadot } from 'polkadot-api/chains';
 import { hydration } from '../../../.papi/descriptors/dist';
 import type { NetworkType } from '../constants';
 import { updateConnectionStatus } from './connection-status';
+import { addParachain } from './smoldot-manager';
 
 let hydrationClient: ReturnType<typeof createClient> | null = null;
 let hydrationApi: ReturnType<ReturnType<typeof createClient>['getTypedApi']> | null = null;
-let smoldotInstance: Awaited<ReturnType<typeof startFromWorker>> | null = null;
 
 // Lightweight Hydration chainspec for smoldot
 const HYDRATION_CHAINSPEC = JSON.stringify({
@@ -44,33 +41,13 @@ const HYDRATION_CHAINSPEC = JSON.stringify({
   },
 });
 
-async function initSmoldot() {
-  if (!smoldotInstance) {
-    smoldotInstance = startFromWorker(new SmWorker());
-  }
-  return smoldotInstance;
-}
-
 export async function getHydrationClient(network: NetworkType) {
   if (!hydrationClient) {
     updateConnectionStatus('hydration', 'connecting');
 
     try {
-      const smoldot = await initSmoldot();
-
-      // For now, only support Polkadot mainnet
-      if (network !== 'polkadot') {
-        throw new Error('Only Polkadot mainnet is supported via smoldot light client currently');
-      }
-
-      // Add relay chain first
-      const relayChain = await smoldot.addChain({ chainSpec: polkadot });
-
-      // Add Hydration parachain with lightweight chainspec
-      const hydrationChain = await smoldot.addChain({
-        chainSpec: HYDRATION_CHAINSPEC,
-        potentialRelayChains: [relayChain],
-      });
+      // Use shared smoldot manager to add Hydration parachain
+      const hydrationChain = await addParachain(HYDRATION_CHAINSPEC, network);
 
       // Create client with smoldot provider
       const provider = getSmProvider(hydrationChain);

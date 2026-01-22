@@ -190,10 +190,7 @@ export function buildDcaScheduleCalls(
  * This is a deterministic calculation that doesn't require a chain connection
  * Formula: SS58Encode(blake2_256("para" + little_endian_encode(parachain_id)))
  */
-export function calculateSovereignAccount(
-  _network: NetworkType,
-  parachainId: number
-): string {
+export function calculateSovereignAccount(parachainId: number): string {
   // Encode parachain ID as 4-byte little-endian
   const parachainIdBytes = new Uint8Array(4);
   new DataView(parachainIdBytes.buffer).setUint32(0, parachainId, true);
@@ -209,23 +206,26 @@ export function calculateSovereignAccount(
   // Blake2b hash (32 bytes)
   const hash = blake2b(input, { dkLen: 32 });
 
-  // Convert to SS58 address using base58 encoding with Substrate prefix
-  // Substrate SS58 format with prefix 42 (generic substrate)
-  const prefix42 = new Uint8Array([42]);
+  // Convert to SS58 address using base58 encoding with Polkadot prefix
+  // SS58 prefix 0 is used for Polkadot. Both Polkadot and Hydration accept
+  // prefix 0 addresses, and the sovereign account derivation produces the
+  // same 32-byte public key regardless of prefix.
+  const SS58_PREFIX_POLKADOT = 0;
+  const prefixByte = new Uint8Array([SS58_PREFIX_POLKADOT]);
   const SS58_PREFIX = new TextEncoder().encode('SS58PRE');
 
   // Compute checksum
-  const checksumInput = new Uint8Array(SS58_PREFIX.length + prefix42.length + hash.length);
+  const checksumInput = new Uint8Array(SS58_PREFIX.length + prefixByte.length + hash.length);
   checksumInput.set(SS58_PREFIX);
-  checksumInput.set(prefix42, SS58_PREFIX.length);
-  checksumInput.set(hash, SS58_PREFIX.length + prefix42.length);
+  checksumInput.set(prefixByte, SS58_PREFIX.length);
+  checksumInput.set(hash, SS58_PREFIX.length + prefixByte.length);
   const checksum = blake2b(checksumInput, { dkLen: 64 }).slice(0, 2);
 
   // Combine prefix + hash + checksum
-  const ss58Bytes = new Uint8Array(prefix42.length + hash.length + checksum.length);
-  ss58Bytes.set(prefix42);
-  ss58Bytes.set(hash, prefix42.length);
-  ss58Bytes.set(checksum, prefix42.length + hash.length);
+  const ss58Bytes = new Uint8Array(prefixByte.length + hash.length + checksum.length);
+  ss58Bytes.set(prefixByte);
+  ss58Bytes.set(hash, prefixByte.length);
+  ss58Bytes.set(checksum, prefixByte.length + hash.length);
 
   return base58.encode(ss58Bytes);
 }

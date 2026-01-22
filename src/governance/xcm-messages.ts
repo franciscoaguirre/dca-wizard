@@ -254,22 +254,23 @@ export function buildDcaScheduleXcm(
 }
 
 /**
- * Build XCM for periodic return with automatic 70/30 split
+ * Build XCM for periodic return with configurable treasury/salary split
  * This transfers stablecoins from Hydration back to Asset Hub
- * with automatic split to Fellowship Treasury (70%) and Salary (30%)
+ * with split to Fellowship Treasury and Salary based on provided percentage
  */
 export function buildPeriodicReturnXcm(
   network: NetworkType,
   usdtAmount: bigint,
   usdcAmount: bigint,
-  feeAmount: bigint
+  feeAmount: bigint,
+  treasurySplitPercent: number = 70
 ): XcmVersionedXcm {
   const assetHubParaId = getParachainId(network, 'ASSET_HUB');
   const collectivesParaId = getParachainId(network, 'COLLECTIVES');
 
-  // Calculate split amounts (70/30)
-  const usdtTreasury = (usdtAmount * 70n) / 100n;
-  const usdcTreasury = (usdcAmount * 70n) / 100n;
+  // Calculate split amounts based on user-provided percentage
+  const usdtTreasury = (usdtAmount * BigInt(treasurySplitPercent)) / 100n;
+  const usdcTreasury = (usdcAmount * BigInt(treasurySplitPercent)) / 100n;
 
   // Decode Fellowship addresses
   const fellowshipTreasuryId = decodeAddress(ACCOUNTS.FELLOWSHIP_TREASURY);

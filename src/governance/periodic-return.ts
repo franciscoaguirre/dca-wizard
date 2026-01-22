@@ -103,7 +103,7 @@ export function calculateSplitAmounts(
  * This should be calculated based on XCM weight and fee schedule
  * For now, using a conservative estimate
  */
-export function estimatePeriodicReturnFee(_network: NetworkType): bigint {
+export function estimatePeriodicReturnFee(): bigint {
   // Conservative estimate: 0.1 USDT per return for fees
   // In production, this should query the actual fee schedule
   return BigInt(100000); // 0.1 USDT (6 decimals)
@@ -120,7 +120,6 @@ export interface SchedulerCall {
     repetitions: number; // Number of times to repeat
   } | null;
   priority: number;
-  call: Uint8Array; // The XCM call to execute
 }
 
 /**
@@ -130,7 +129,8 @@ export interface SchedulerCall {
 export function buildPeriodicReturnSchedulerCall(
   network: NetworkType,
   schedule: PeriodicReturnSchedule,
-  feeAmount: bigint
+  feeAmount: bigint,
+  treasurySplitPercent: number = 70
 ): {
   schedulerCall: {
     after: number;
@@ -139,12 +139,13 @@ export function buildPeriodicReturnSchedulerCall(
   };
   xcmCall: ReturnType<typeof buildPeriodicReturnXcm>;
 } {
-  // Build the XCM message for periodic returns
+  // Build the XCM message for periodic returns with user-specified split
   const xcmCall = buildPeriodicReturnXcm(
     network,
     schedule.usdtAmountPerReturn,
     schedule.usdcAmountPerReturn,
-    feeAmount
+    feeAmount,
+    treasurySplitPercent
   );
 
   // Build the scheduler call
