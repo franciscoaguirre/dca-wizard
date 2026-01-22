@@ -7,26 +7,29 @@ export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElemen
 }
 
 const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ className, variant = 'default', size = 'default', ...props }, ref) => {
+  ({ className, variant = 'default', size = 'default', disabled, ...props }, ref) => {
     return (
       <button
         className={cn(
-          'inline-flex items-center justify-center rounded-lg font-medium transition-colors',
+          'inline-flex items-center justify-center rounded-lg font-semibold transition-colors shadow-md',
           'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-primary-500',
-          'disabled:pointer-events-none disabled:opacity-50',
           {
-            'bg-primary-500 text-white hover:bg-primary-600': variant === 'default',
-            'border-2 border-neutral-300 bg-transparent text-neutral-700 hover:bg-neutral-100': variant === 'outline',
-            'text-neutral-700 hover:bg-neutral-100': variant === 'ghost',
+            'bg-primary-400 text-black hover:bg-primary-500 active:bg-primary-600': variant === 'default' && !disabled,
+            'bg-neutral-300 text-neutral-500 cursor-not-allowed': variant === 'default' && disabled,
+            'border-2 border-neutral-300 bg-white text-neutral-900 hover:bg-neutral-100': variant === 'outline' && !disabled,
+            'border-2 border-neutral-200 bg-neutral-100 text-neutral-400 cursor-not-allowed': variant === 'outline' && disabled,
+            'text-neutral-900 hover:bg-neutral-100': variant === 'ghost' && !disabled,
+            'text-neutral-400 cursor-not-allowed': variant === 'ghost' && disabled,
           },
           {
             'px-5 py-2.5': size === 'default',
             'px-4 py-2 text-sm': size === 'sm',
-            'px-8 py-3': size === 'lg',
+            'px-8 py-3 text-lg': size === 'lg',
           },
           className
         )}
         ref={ref}
+        disabled={disabled}
         {...props}
       />
     );

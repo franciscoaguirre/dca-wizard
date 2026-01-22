@@ -4,6 +4,7 @@
  */
 
 import { blake2b } from '@noble/hashes/blake2.js';
+import { base58 } from '@scure/base';
 import type { NetworkType, StablecoinType } from '../api/constants';
 import {
   getHydrationAssetId,
@@ -26,7 +27,7 @@ export interface DcaOrder {
  * These parameters are passed to the DCA.schedule call on Hydration
  */
 export interface DcaScheduleParams {
-  owner: Uint8Array; // Sovereign account (Collectives parachain)
+  owner: string; // Sovereign account SS58 address (Collectives parachain)
   period: number; // Blocks between trades
   total_amount: bigint; // 0 = continuous until depleted
   max_retries: number; // Number of retry attempts
@@ -40,7 +41,7 @@ export interface DcaScheduleParams {
  */
 export function calculateDcaParams(
   network: NetworkType,
-  sovereignAccount: Uint8Array,
+  sovereignAccount: string,
   stablecoin: 'USDT' | 'USDC',
   dcaFrequencyBlocks: number,
   slippagePercent: number
@@ -69,31 +70,40 @@ export function calculateDcaParams(
 
 /**
  * Encode DCA.schedule call
- * In production, this would use the Hydration chain's TypedApi from polkadot-api
- * For now, we'll create a placeholder that needs to be connected to the actual API
+ * Uses the Hydration chain's TypedApi from polkadot-api
  */
-export function encodeDcaScheduleCall(
-  _params: DcaScheduleParams
-): Uint8Array {
-  // This is a placeholder - in production, this would be:
-  // const hydrationApi = getHydrationClient(network).getTypedApi(hydration);
-  // return hydrationApi.tx.DCA.schedule({
-  //   schedule: {
-  //     owner: params.owner,
-  //     period: params.period,
-  //     total_amount: params.total_amount,
-  //     max_retries: params.max_retries,
-  //     stability_threshold: params.stability_threshold,
-  //     slippage: params.slippage,
-  //     order: params.order,
-  //   },
-  // }).encodedData;
+export async function encodeDcaScheduleCall(
+  network: NetworkType,
+  params: DcaScheduleParams
+) {
+  const { getHydrationApi } = await import('../api/clients/hydration');
+  const { Enum } = await import('polkadot-api');
 
-  // For now, throw an error indicating this needs chain descriptors
-  throw new Error(
-    'encodeDcaScheduleCall requires Hydration chain descriptors. ' +
-    'Run: papi add hydration -n hydration'
-  );
+  // Get the typed API (will connect to chain via smoldot)
+  const hydrationApi = await getHydrationApi(network);
+
+  // Create the DCA.schedule call
+  const dcaCall = hydrationApi.tx.DCA.schedule({
+    schedule: {
+      owner: params.owner, // SS58 string
+      period: params.period,
+      total_amount: params.total_amount,
+      max_retries: params.max_retries,
+      stability_threshold: params.stability_threshold,
+      slippage: params.slippage,
+      order: Enum('Sell', {
+        asset_in: params.order.asset_in,
+        asset_out: params.order.asset_out,
+        amount_in: params.order.amount_in,
+        min_amount_out: 0n, // No minimum for DCA
+        route: [],
+      }),
+    },
+    start_execution_block: undefined,
+  });
+
+  // Get the encoded call data
+  return await dcaCall.getEncodedData();
 }
 
 /**
@@ -139,7 +149,7 @@ export function estimateStablecoinPerTrade(
  */
 export function buildDcaScheduleCalls(
   network: NetworkType,
-  sovereignAccount: Uint8Array,
+  sovereignAccount: string,
   stablecoin: StablecoinType,
   dcaFrequencyBlocks: number,
   slippagePercent: number
@@ -177,10 +187,13 @@ export function buildDcaScheduleCalls(
 
 /**
  * Calculate sovereign account address for a parachain
- * This is the account that the parachain controls on other chains
- * Formula: blake2_256("para" + encode(parachain_id)) truncated/padded to 32 bytes
+ * This is a deterministic calculation that doesn't require a chain connection
+ * Formula: SS58Encode(blake2_256("para" + little_endian_encode(parachain_id)))
  */
-export function calculateSovereignAccount(parachainId: number): Uint8Array {
+export function calculateSovereignAccount(
+  _network: NetworkType,
+  parachainId: number
+): string {
   // Encode parachain ID as 4-byte little-endian
   const parachainIdBytes = new Uint8Array(4);
   new DataView(parachainIdBytes.buffer).setUint32(0, parachainId, true);
@@ -194,5 +207,25 @@ export function calculateSovereignAccount(parachainId: number): Uint8Array {
   input.set(parachainIdBytes, prefix.length);
 
   // Blake2b hash (32 bytes)
-  return blake2b(input, { dkLen: 32 });
+  const hash = blake2b(input, { dkLen: 32 });
+
+  // Convert to SS58 address using base58 encoding with Substrate prefix
+  // Substrate SS58 format with prefix 42 (generic substrate)
+  const prefix42 = new Uint8Array([42]);
+  const SS58_PREFIX = new TextEncoder().encode('SS58PRE');
+
+  // Compute checksum
+  const checksumInput = new Uint8Array(SS58_PREFIX.length + prefix42.length + hash.length);
+  checksumInput.set(SS58_PREFIX);
+  checksumInput.set(prefix42, SS58_PREFIX.length);
+  checksumInput.set(hash, SS58_PREFIX.length + prefix42.length);
+  const checksum = blake2b(checksumInput, { dkLen: 64 }).slice(0, 2);
+
+  // Combine prefix + hash + checksum
+  const ss58Bytes = new Uint8Array(prefix42.length + hash.length + checksum.length);
+  ss58Bytes.set(prefix42);
+  ss58Bytes.set(hash, prefix42.length);
+  ss58Bytes.set(checksum, prefix42.length + hash.length);
+
+  return base58.encode(ss58Bytes);
 }

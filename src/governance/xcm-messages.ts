@@ -1,144 +1,123 @@
 /**
  * XCM Message Builders
- * Constructs XCM V4 messages for cross-chain operations
+ * Constructs XCM V4/V5 messages for cross-chain operations
  */
 
 import { base58 } from '@scure/base';
 import { blake2b } from '@noble/hashes/blake2.js';
+import {
+  XcmVersionedXcm,
+  XcmV5Instruction,
+  XcmV5Junction,
+  XcmV5Junctions,
+  XcmV5AssetFilter,
+  XcmV5WildAsset,
+  XcmV3MultiassetFungibility,
+  XcmV3WeightLimit,
+  XcmV2OriginKind,
+} from '@polkadot-api/descriptors';
+import { Binary } from 'polkadot-api';
 import type { NetworkType } from '../api/constants';
 import {
   getParachainId,
-  getHydrationAssetId,
   getAssetHubAssetId,
   ACCOUNTS,
 } from '../api/constants';
 
-/**
- * XCM V4 Types (simplified representations)
- * In production, these would come from polkadot-api descriptors
- */
-
-export type XcmV4Location = {
-  parents: number;
-  interior:
-    | { Here: null }
-    | { X1: Array<XcmV4Junction> }
-    | { X2: Array<XcmV4Junction> };
-};
-
-export type XcmV4Junction =
-  | { Parachain: number }
-  | { AccountId32: { network: null; id: Uint8Array } }
-  | { GlobalConsensus: { Polkadot: null } | { Paseo: null } };
-
-export type XcmV4Asset = {
-  id: XcmV4AssetId;
-  fun: { Fungible: bigint };
-};
-
-export type XcmV4AssetId =
-  | { Concrete: XcmV4Location }
-  | { Abstract: Uint8Array };
-
-export type XcmV4AssetFilter =
-  | { Definite: Array<XcmV4Asset> }
-  | { Wild: { AllCounted: number } | { All: null } };
-
-export type XcmV4Instruction =
-  | { WithdrawAsset: Array<XcmV4Asset> }
-  | { ReserveAssetDeposited: Array<XcmV4Asset> }
-  | { ReceiveTeleportedAsset: Array<XcmV4Asset> }
-  | { PayFees: { asset: XcmV4Asset } }
-  | { BuyExecution: { fees: XcmV4Asset; weight_limit: { Unlimited: null } | { Limited: bigint } } }
-  | { DepositAsset: { assets: XcmV4AssetFilter; beneficiary: XcmV4Location } }
-  | { DepositReserveAsset: { assets: XcmV4AssetFilter; dest: XcmV4Location; xcm: Array<XcmV4Instruction> } }
-  | { InitiateReserveWithdraw: { assets: XcmV4AssetFilter; reserve: XcmV4Location; xcm: Array<XcmV4Instruction> } }
-  | { Transact: { origin_kind: string; require_weight_at_most: { ref_time: bigint; proof_size: bigint }; call: Uint8Array } }
-  | { AliasOrigin: XcmV4Location }
-  | { ClearOrigin: null };
-
-export type XcmVersionedXcm =
-  | { V4: Array<XcmV4Instruction> };
+// Re-export XcmVersionedXcm for use in other modules
+export type { XcmVersionedXcm };
 
 /**
  * Helper: Create a parachain location
  */
-export function parachainLocation(parachainId: number): XcmV4Location {
+export function parachainLocation(parachainId: number) {
   return {
     parents: 1,
-    interior: { X1: [{ Parachain: parachainId }] },
+    interior: XcmV5Junctions.X1(XcmV5Junction.Parachain(parachainId)),
   };
 }
 
 /**
- * Helper: Create an account location on a parachain
+ * Helper: Create an account location on Asset Hub
+ * Accepts SS58 address string
  */
-export function accountOnParachainLocation(
-  parachainId: number,
-  accountId: Uint8Array
-): XcmV4Location {
+export function accountOnAssetHub(accountIdBytes: Uint8Array) {
+  return {
+    parents: 0,
+    interior: XcmV5Junctions.X1(
+      XcmV5Junction.AccountId32({
+        network: undefined,
+        id: Binary.fromBytes(accountIdBytes),
+      })
+    ),
+  };
+}
+
+/**
+ * Helper: Create native DOT asset ID
+ */
+export const DOT_ASSET_ID = {
+  parents: 0,
+  interior: XcmV5Junctions.Here(),
+};
+
+/**
+ * Helper: Create USDT asset ID on Asset Hub
+ */
+export function getUsdtAssetId(network: NetworkType) {
+  const assetId = getAssetHubAssetId(network, 'USDT');
+  return {
+    parents: 0,
+    interior: XcmV5Junctions.X2([
+      XcmV5Junction.PalletInstance(50), // Assets pallet
+      XcmV5Junction.GeneralIndex(BigInt(assetId)),
+    ] as const),
+  };
+}
+
+/**
+ * Helper: Create USDC asset ID on Asset Hub
+ */
+export function getUsdcAssetId(network: NetworkType) {
+  const assetId = getAssetHubAssetId(network, 'USDC');
+  return {
+    parents: 0,
+    interior: XcmV5Junctions.X2([
+      XcmV5Junction.PalletInstance(50), // Assets pallet
+      XcmV5Junction.GeneralIndex(BigInt(assetId)),
+    ] as const),
+  };
+}
+
+/**
+ * Helper: Create USDT asset ID from Hydration's perspective (coming from Asset Hub)
+ */
+export function getUsdtAssetIdFromHydration(network: NetworkType) {
+  const assetHubParaId = getParachainId(network, 'ASSET_HUB');
+  const assetId = getAssetHubAssetId(network, 'USDT');
   return {
     parents: 1,
-    interior: {
-      X2: [
-        { Parachain: parachainId },
-        { AccountId32: { network: null, id: accountId } },
-      ],
-    },
+    interior: XcmV5Junctions.X3([
+      XcmV5Junction.Parachain(assetHubParaId),
+      XcmV5Junction.PalletInstance(50),
+      XcmV5Junction.GeneralIndex(BigInt(assetId)),
+    ] as const),
   };
 }
 
 /**
- * Helper: Create DOT asset on Hydration
+ * Helper: Create USDC asset ID from Hydration's perspective
  */
-export function dotAssetOnHydration(network: NetworkType): XcmV4Asset {
-  const assetId = getHydrationAssetId(network, 'DOT');
+export function getUsdcAssetIdFromHydration(network: NetworkType) {
+  const assetHubParaId = getParachainId(network, 'ASSET_HUB');
+  const assetId = getAssetHubAssetId(network, 'USDC');
   return {
-    id: {
-      Concrete: {
-        parents: 0,
-        interior: { X1: [{ Parachain: assetId }] }, // Simplified - actual structure may vary
-      },
-    },
-    fun: { Fungible: 0n }, // Amount set separately
-  };
-}
-
-/**
- * Helper: Create USDT asset
- */
-export function usdtAsset(network: NetworkType, amount: bigint, onHydration: boolean): XcmV4Asset {
-  const assetId = onHydration
-    ? getHydrationAssetId(network, 'USDT')
-    : getAssetHubAssetId(network, 'USDT');
-
-  return {
-    id: {
-      Concrete: {
-        parents: 0,
-        interior: { X1: [{ Parachain: assetId as number }] },
-      },
-    },
-    fun: { Fungible: amount },
-  };
-}
-
-/**
- * Helper: Create USDC asset
- */
-export function usdcAsset(network: NetworkType, amount: bigint, onHydration: boolean): XcmV4Asset {
-  const assetId = onHydration
-    ? getHydrationAssetId(network, 'USDC')
-    : getAssetHubAssetId(network, 'USDC');
-
-  return {
-    id: {
-      Concrete: {
-        parents: 0,
-        interior: { X1: [{ Parachain: assetId as number }] },
-      },
-    },
-    fun: { Fungible: amount },
+    parents: 1,
+    interior: XcmV5Junctions.X3([
+      XcmV5Junction.Parachain(assetHubParaId),
+      XcmV5Junction.PalletInstance(50),
+      XcmV5Junction.GeneralIndex(BigInt(assetId)),
+    ] as const),
   };
 }
 
@@ -189,57 +168,45 @@ export function buildTreasuryToHydrationXcm(
   const hydrationParaId = getParachainId(network, 'HYDRATION');
   const collectivesParaId = getParachainId(network, 'COLLECTIVES');
 
-  return {
-    V4: [
-      // 1. Withdraw DOT from treasury
+  return XcmVersionedXcm.V5([
+    // 1. Withdraw DOT from treasury
+    XcmV5Instruction.WithdrawAsset([
       {
-        WithdrawAsset: [
-          {
-            id: { Concrete: { parents: 0, interior: { Here: null } } }, // Native DOT
-            fun: { Fungible: dotAmount + feeAmount },
+        id: DOT_ASSET_ID,
+        fun: XcmV3MultiassetFungibility.Fungible(dotAmount + feeAmount),
+      },
+    ]),
+
+    // 2. Pay fees on Asset Hub
+    XcmV5Instruction.PayFees({
+      asset: {
+        id: DOT_ASSET_ID,
+        fun: XcmV3MultiassetFungibility.Fungible(feeAmount / 4n),
+      },
+    }),
+
+    // 3. Deposit reserve asset to Hydration
+    XcmV5Instruction.DepositReserveAsset({
+      assets: XcmV5AssetFilter.Wild(XcmV5WildAsset.AllCounted(1)),
+      dest: parachainLocation(hydrationParaId),
+      xcm: [
+        // On Hydration: buy execution (must use BuyExecution, not PayFees for V4 compat)
+        XcmV5Instruction.BuyExecution({
+          fees: {
+            id: DOT_ASSET_ID,
+            fun: XcmV3MultiassetFungibility.Fungible(feeAmount / 4n),
           },
-        ],
-      },
+          weight_limit: XcmV3WeightLimit.Unlimited(),
+        }),
 
-      // 2. Pay fees on Asset Hub
-      {
-        PayFees: {
-          asset: {
-            id: { Concrete: { parents: 0, interior: { Here: null } } },
-            fun: { Fungible: feeAmount / 4n }, // Reserve some for later
-          },
-        },
-      },
-
-      // 3. Deposit reserve asset to Hydration
-      {
-        DepositReserveAsset: {
-          assets: { Wild: { AllCounted: 1 } },
-          dest: parachainLocation(hydrationParaId),
-          xcm: [
-            // On Hydration: buy execution
-            {
-              BuyExecution: {
-                fees: {
-                  id: { Concrete: { parents: 0, interior: { Here: null } } },
-                  fun: { Fungible: feeAmount / 4n },
-                },
-                weight_limit: { Unlimited: null },
-              },
-            },
-
-            // Deposit to Collectives sovereign account
-            {
-              DepositAsset: {
-                assets: { Wild: { AllCounted: 1 } },
-                beneficiary: parachainLocation(collectivesParaId),
-              },
-            },
-          ],
-        },
-      },
-    ],
-  };
+        // Deposit to Collectives sovereign account
+        XcmV5Instruction.DepositAsset({
+          assets: XcmV5AssetFilter.Wild(XcmV5WildAsset.AllCounted(1)),
+          beneficiary: parachainLocation(collectivesParaId),
+        }),
+      ],
+    }),
+  ]);
 }
 
 /**
@@ -248,52 +215,42 @@ export function buildTreasuryToHydrationXcm(
  */
 export function buildDcaScheduleXcm(
   network: NetworkType,
-  dcaCallEncoded: Uint8Array,
+  dcaCallEncoded: Binary,
   feeAmount: bigint
 ): XcmVersionedXcm {
   const collectivesParaId = getParachainId(network, 'COLLECTIVES');
 
-  return {
-    V4: [
-      // 1. Withdraw fee payment from sovereign account
+  return XcmVersionedXcm.V5([
+    // 1. Withdraw fee payment from sovereign account (using DOT on Hydration)
+    XcmV5Instruction.WithdrawAsset([
       {
-        WithdrawAsset: [
-          {
-            id: { Concrete: { parents: 0, interior: { Here: null } } },
-            fun: { Fungible: feeAmount },
-          },
-        ],
+        id: DOT_ASSET_ID,
+        fun: XcmV3MultiassetFungibility.Fungible(feeAmount),
       },
+    ]),
 
-      // 2. Buy execution
-      {
-        BuyExecution: {
-          fees: {
-            id: { Concrete: { parents: 0, interior: { Here: null } } },
-            fun: { Fungible: feeAmount },
-          },
-          weight_limit: { Unlimited: null },
-        },
+    // 2. Buy execution
+    XcmV5Instruction.BuyExecution({
+      fees: {
+        id: DOT_ASSET_ID,
+        fun: XcmV3MultiassetFungibility.Fungible(feeAmount),
       },
+      weight_limit: XcmV3WeightLimit.Unlimited(),
+    }),
 
-      // 3. Change origin to Collectives sovereign account
-      {
-        AliasOrigin: parachainLocation(collectivesParaId),
-      },
+    // 3. Change origin to Collectives sovereign account
+    XcmV5Instruction.AliasOrigin(parachainLocation(collectivesParaId)),
 
-      // 4. Execute DCA.schedule call
-      {
-        Transact: {
-          origin_kind: 'SovereignAccount',
-          require_weight_at_most: {
-            ref_time: 1000000000n,
-            proof_size: 64000n,
-          },
-          call: dcaCallEncoded,
-        },
+    // 4. Execute DCA.schedule call
+    XcmV5Instruction.Transact({
+      origin_kind: XcmV2OriginKind.SovereignAccount(),
+      fallback_max_weight: {
+        ref_time: 1000000000n,
+        proof_size: 64000n,
       },
-    ],
-  };
+      call: dcaCallEncoded,
+    }),
+  ]);
 }
 
 /**
@@ -318,69 +275,77 @@ export function buildPeriodicReturnXcm(
   const fellowshipTreasuryId = decodeAddress(ACCOUNTS.FELLOWSHIP_TREASURY);
   const fellowshipSalaryId = decodeAddress(ACCOUNTS.FELLOWSHIP_SALARY);
 
-  return {
-    V4: [
-      // 1. Withdraw stables from Collectives sovereign account on Hydration
+  // Asset IDs from Hydration's perspective (reserve assets from Asset Hub)
+  const usdtAssetId = getUsdtAssetIdFromHydration(network);
+  const usdcAssetId = getUsdcAssetIdFromHydration(network);
+
+  // Asset IDs on Asset Hub (local perspective)
+  const usdtAssetIdLocal = getUsdtAssetId(network);
+  const usdcAssetIdLocal = getUsdcAssetId(network);
+
+  return XcmVersionedXcm.V5([
+    // 1. Withdraw stables from Collectives sovereign account on Hydration
+    XcmV5Instruction.WithdrawAsset([
       {
-        WithdrawAsset: [
-          usdtAsset(network, usdtAmount, true),
-          usdcAsset(network, usdcAmount, true),
-        ],
+        id: usdtAssetId,
+        fun: XcmV3MultiassetFungibility.Fungible(usdtAmount),
       },
-
-      // 2. Pay fees on Hydration
       {
-        BuyExecution: {
-          fees: usdtAsset(network, feeAmount, true),
-          weight_limit: { Unlimited: null },
-        },
+        id: usdcAssetId,
+        fun: XcmV3MultiassetFungibility.Fungible(usdcAmount),
       },
+    ]),
 
-      // 3. Change origin to sovereign account
-      {
-        AliasOrigin: parachainLocation(collectivesParaId),
+    // 2. Pay fees on Hydration (using USDT)
+    XcmV5Instruction.BuyExecution({
+      fees: {
+        id: usdtAssetId,
+        fun: XcmV3MultiassetFungibility.Fungible(feeAmount),
       },
+      weight_limit: XcmV3WeightLimit.Unlimited(),
+    }),
 
-      // 4. Initiate reserve withdraw back to Asset Hub with nested instructions
-      {
-        InitiateReserveWithdraw: {
-          assets: { Wild: { AllCounted: 2 } },
-          reserve: parachainLocation(assetHubParaId),
-          xcm: [
-            // On Asset Hub: Clear origin
-            { ClearOrigin: null },
+    // 3. Change origin to Collectives sovereign account
+    XcmV5Instruction.AliasOrigin(parachainLocation(collectivesParaId)),
 
-            // Pay fees on Asset Hub
+    // 4. Initiate reserve withdraw back to Asset Hub with nested instructions
+    XcmV5Instruction.InitiateReserveWithdraw({
+      assets: XcmV5AssetFilter.Wild(XcmV5WildAsset.AllCounted(2)),
+      reserve: parachainLocation(assetHubParaId),
+      xcm: [
+        // On Asset Hub: Clear origin
+        XcmV5Instruction.ClearOrigin(),
+
+        // Pay fees on Asset Hub (using USDT)
+        XcmV5Instruction.BuyExecution({
+          fees: {
+            id: usdtAssetIdLocal,
+            fun: XcmV3MultiassetFungibility.Fungible(feeAmount),
+          },
+          weight_limit: XcmV3WeightLimit.Unlimited(),
+        }),
+
+        // Deposit 70% to Fellowship Treasury
+        XcmV5Instruction.DepositAsset({
+          assets: XcmV5AssetFilter.Definite([
             {
-              BuyExecution: {
-                fees: usdtAsset(network, feeAmount, false),
-                weight_limit: { Unlimited: null },
-              },
+              id: usdtAssetIdLocal,
+              fun: XcmV3MultiassetFungibility.Fungible(usdtTreasury),
             },
-
-            // Deposit 70% to Fellowship Treasury
             {
-              DepositAsset: {
-                assets: {
-                  Definite: [
-                    usdtAsset(network, usdtTreasury, false),
-                    usdcAsset(network, usdcTreasury, false),
-                  ],
-                },
-                beneficiary: accountOnParachainLocation(assetHubParaId, fellowshipTreasuryId),
-              },
+              id: usdcAssetIdLocal,
+              fun: XcmV3MultiassetFungibility.Fungible(usdcTreasury),
             },
+          ]),
+          beneficiary: accountOnAssetHub(fellowshipTreasuryId),
+        }),
 
-            // Deposit remaining 30% to Fellowship Salary
-            {
-              DepositAsset: {
-                assets: { Wild: { AllCounted: 2 } },
-                beneficiary: accountOnParachainLocation(assetHubParaId, fellowshipSalaryId),
-              },
-            },
-          ],
-        },
-      },
-    ],
-  };
+        // Deposit remaining 30% to Fellowship Salary
+        XcmV5Instruction.DepositAsset({
+          assets: XcmV5AssetFilter.Wild(XcmV5WildAsset.AllCounted(2)),
+          beneficiary: accountOnAssetHub(fellowshipSalaryId),
+        }),
+      ],
+    }),
+  ]);
 }

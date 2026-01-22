@@ -317,14 +317,38 @@ export function DcaWizardForm({ state, dispatch, onNext }: DcaWizardFormProps) {
       )}
 
       {/* Submit Button */}
-      <div className="flex justify-end">
-        <Button
-          type="submit"
-          size="lg"
-          disabled={hasErrors || !state.proposal || state.isBuilding}
-        >
-          {state.isBuilding ? 'Building Proposal...' : 'Continue to Preview'}
-        </Button>
+      <div className="space-y-3">
+        {!state.proposal && !state.isBuilding && state.dotAmount === '' && (
+          <Alert>
+            <AlertDescription>
+              Enter a DOT amount (minimum 100 DOT) to continue
+            </AlertDescription>
+          </Alert>
+        )}
+        {!state.proposal && !state.isBuilding && state.dotAmount !== '' && hasErrors && (
+          <Alert>
+            <AlertDescription>
+              Please fix the validation errors above to continue
+            </AlertDescription>
+          </Alert>
+        )}
+        {state.proposal && !hasErrors && !state.isBuilding && (
+          <Alert variant="success">
+            <AlertDescription>
+              Proposal ready! Click below to preview your governance proposal.
+            </AlertDescription>
+          </Alert>
+        )}
+        <div className="flex justify-end">
+          <Button
+            type="submit"
+            size="lg"
+            disabled={hasErrors || !state.proposal || state.isBuilding}
+            className="min-w-[200px]"
+          >
+            {state.isBuilding ? 'Building Proposal...' : 'Continue to Preview'}
+          </Button>
+        </div>
       </div>
     </form>
   );

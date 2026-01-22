@@ -3,14 +3,24 @@
  * Manages the multi-step wizard flow
  */
 
+import { useEffect } from 'react';
 import { Check } from 'lucide-react';
 import { useWizardState } from './use-wizard-state';
 import { DcaWizardForm } from './DcaWizardForm';
 import { ProposalPreview } from './ProposalPreview';
 import { SubmitProposal } from './SubmitProposal';
+import { ConnectionStatusIndicator } from '../components/ConnectionStatus/ConnectionStatusIndicator';
+import { getAssetHubClient } from '../api/clients/dotAh';
+import { getHydrationClient } from '../api/clients/hydration';
 
 export function DcaWizard() {
   const { state, dispatch, canProceedToPreview } = useWizardState();
+
+  // Proactively initialize light clients in background
+  useEffect(() => {
+    getAssetHubClient('polkadot').catch(console.error);
+    getHydrationClient('polkadot').catch(console.error);
+  }, []);
 
   const handleNext = () => {
     if (state.currentStep === 'form' && canProceedToPreview) {
@@ -32,13 +42,16 @@ export function DcaWizard() {
     <div className="min-h-screen bg-neutral-50 py-8">
       <div className="container mx-auto px-4 max-w-4xl">
         {/* Header */}
-        <div className="mb-8">
-          <h1 className="text-3xl font-bold text-neutral-900">
-            DCA Wizard
-          </h1>
-          <p className="text-base text-neutral-600 mt-2">
-            Create a governance proposal for Dollar Cost Averaging treasury operations
-          </p>
+        <div className="mb-8 flex items-start justify-between">
+          <div>
+            <h1 className="text-3xl font-bold text-neutral-900">
+              DCA Wizard
+            </h1>
+            <p className="text-base text-neutral-600 mt-2">
+              Create a governance proposal for Dollar Cost Averaging treasury operations
+            </p>
+          </div>
+          <ConnectionStatusIndicator />
         </div>
 
         {/* Progress Steps */}

@@ -3,11 +3,17 @@
  * Shows detailed preview of the DCA proposal before submission
  */
 
+import { useState, useEffect } from 'react';
 import type { DcaProposal } from '../governance/builder';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Alert, AlertDescription, AlertTitle } from '../components/ui/alert';
-import { ArrowRight, AlertTriangle, Info } from 'lucide-react';
+import { ArrowRight, AlertTriangle, Info, Code2, Copy, Check } from 'lucide-react';
+import {
+  getTransactionBreakdown,
+  encodeProposalCall,
+  DESCRIPTOR_INSTRUCTIONS,
+} from '../governance/call-encoder';
 
 interface ProposalPreviewProps {
   proposal: DcaProposal;
@@ -17,6 +23,30 @@ interface ProposalPreviewProps {
 
 export function ProposalPreview({ proposal, onBack, onNext }: ProposalPreviewProps) {
   const { inputs, calculations, validation } = proposal;
+  const [showInstructions, setShowInstructions] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [encoded, setEncoded] = useState<string | null>(null);
+  const [encodingError, setEncodingError] = useState<string | null>(null);
+  const [isEncoding, setIsEncoding] = useState(false);
+
+  const transactionBreakdown = getTransactionBreakdown(proposal);
+
+  // Attempt to encode the proposal on mount
+  useEffect(() => {
+    (async () => {
+      setIsEncoding(true);
+      const result = await encodeProposalCall(proposal);
+      setEncoded(result.encoded);
+      setEncodingError(result.error);
+      setIsEncoding(false);
+    })();
+  }, [proposal]);
+
+  const handleCopyInstructions = () => {
+    navigator.clipboard.writeText(DESCRIPTOR_INSTRUCTIONS);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
 
   return (
     <div className="space-y-6">
@@ -270,6 +300,134 @@ export function ProposalPreview({ proposal, onBack, onNext }: ProposalPreviewPro
               </div>
             </div>
           </div>
+        </CardContent>
+      </Card>
+
+      {/* Transaction Breakdown */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Transaction Breakdown</CardTitle>
+          <CardDescription>
+            {transactionBreakdown.totalCalls} call{transactionBreakdown.totalCalls > 1 ? 's' : ''} in Utility.batch_all
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="space-y-3">
+            {transactionBreakdown.calls.map((call, idx) => (
+              <div
+                key={idx}
+                className="flex items-start space-x-3 p-3 bg-neutral-50 rounded-lg border border-neutral-200"
+              >
+                <div className="flex-shrink-0">
+                  <Code2 className="w-5 h-5 text-primary-600" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center space-x-2">
+                    <h5 className="text-sm font-semibold text-neutral-800">{call.name}</h5>
+                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-primary-100 text-primary-700">
+                      {call.pallet}.{call.call}
+                    </span>
+                  </div>
+                  <p className="text-sm text-neutral-600 mt-1">{call.description}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Encoded Call Data */}
+      <Card>
+        <CardHeader>
+          <CardTitle>Encoded Transaction</CardTitle>
+          <CardDescription>
+            Call data for submission to governance
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {isEncoding ? (
+            <div className="flex items-center justify-center py-8">
+              <div className="text-center">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600 mx-auto mb-2"></div>
+                <p className="text-sm text-neutral-600">Encoding transaction...</p>
+              </div>
+            </div>
+          ) : encoded ? (
+            <div className="space-y-3">
+              <div className="bg-neutral-50 rounded-lg p-4 border border-neutral-200">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-sm font-medium text-neutral-700">Call Data:</span>
+                  <span className="text-xs text-neutral-500">{(encoded.length - 2) / 2} bytes</span>
+                </div>
+                <div className="bg-white rounded border border-neutral-200 p-3 overflow-x-auto">
+                  <code className="text-xs text-neutral-700 font-mono break-all">
+                    {encoded}
+                  </code>
+                </div>
+              </div>
+
+              {(encoded.length - 2) / 2 > 10 * 1024 && (
+                <Alert variant="warning">
+                  <AlertTriangle className="h-4 w-4" />
+                  <AlertTitle>Large Call</AlertTitle>
+                  <AlertDescription>
+                    This call is larger than 10KB and will need to be submitted as a preimage first.
+                  </AlertDescription>
+                </Alert>
+              )}
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <Alert variant="warning">
+                <Code2 className="h-4 w-4" />
+                <AlertTitle>Encoding Not Complete</AlertTitle>
+                <AlertDescription>{encodingError}</AlertDescription>
+              </Alert>
+
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-sm font-medium text-neutral-700">
+                    Generate Chain Descriptors
+                  </h4>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setShowInstructions(!showInstructions)}
+                  >
+                    {showInstructions ? 'Hide' : 'Show'} Instructions
+                  </Button>
+                </div>
+
+                {showInstructions && (
+                  <div className="relative">
+                    <div className="bg-neutral-900 rounded-lg p-4 overflow-x-auto">
+                      <pre className="text-xs text-neutral-100 font-mono whitespace-pre-wrap">
+                        {DESCRIPTOR_INSTRUCTIONS}
+                      </pre>
+                    </div>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="absolute top-2 right-2"
+                      onClick={handleCopyInstructions}
+                    >
+                      {copied ? (
+                        <>
+                          <Check className="w-4 h-4 mr-1" />
+                          Copied
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-4 h-4 mr-1" />
+                          Copy
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
 

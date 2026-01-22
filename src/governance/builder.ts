@@ -6,6 +6,7 @@
 import type { NetworkType, StablecoinType } from '../api/constants';
 import {
   getParachainId,
+  ACCOUNTS,
   DEFAULTS,
   TIMING,
   daysToBlocks,
@@ -20,6 +21,7 @@ import {
   calculateSovereignAccount,
   calculateTotalTrades,
   calculateDotPerTrade,
+  encodeDcaScheduleCall,
 } from './dca-setup';
 import {
   calculatePeriodicReturnParams,
@@ -56,7 +58,7 @@ export interface DcaCalculations {
   estimatedUsdtPerReturn: bigint;
   estimatedUsdcPerReturn: bigint;
   totalDurationBlocks: number;
-  sovereignAccount: Uint8Array;
+  sovereignAccount: string; // SS58 address
   feeEstimate: bigint;
 }
 
@@ -220,7 +222,7 @@ export async function buildDcaProposal(
 
   // Calculate sovereign account for Collectives parachain
   const collectivesParaId = getParachainId(inputs.network, 'COLLECTIVES');
-  const sovereignAccount = calculateSovereignAccount(collectivesParaId);
+  const sovereignAccount = calculateSovereignAccount(inputs.network, collectivesParaId);
 
   // Calculate DCA parameters
   const totalTrades = calculateTotalTrades(inputs.dcaDurationDays, inputs.dcaFrequencyBlocks);
@@ -274,26 +276,29 @@ export async function buildDcaProposal(
     inputs.slippagePercent
   );
 
-  const dcaSchedule = dcaScheduleCalls.map((dca) => {
-    // Build XCM to schedule DCA
-    // Note: encodeDcaScheduleCall needs proper chain descriptors
-    const dcaCallEncoded = new Uint8Array(0); // Placeholder
-    const xcmCall = buildDcaScheduleXcm(
-      inputs.network,
-      dcaCallEncoded,
-      BigInt(5e8) // 0.05 DOT for fees
-    );
+  const dcaSchedule = await Promise.all(
+    dcaScheduleCalls.map(async (dca) => {
+      // Encode the DCA.schedule call using Hydration API
+      const dcaCallEncoded = await encodeDcaScheduleCall(inputs.network, dca.params);
 
-    return {
-      stablecoin: dca.stablecoin,
-      schedulerCall: {
-        after: TIMING.WARM_UP_BLOCKS,
-        maybe_periodic: null, // One-time execution
-        priority: 128,
-      },
-      xcmCall,
-    };
-  });
+      // Build XCM to schedule DCA
+      const xcmCall = buildDcaScheduleXcm(
+        inputs.network,
+        dcaCallEncoded,
+        BigInt(5e8) // 0.05 DOT for fees
+      );
+
+      return {
+        stablecoin: dca.stablecoin,
+        schedulerCall: {
+          after: TIMING.WARM_UP_BLOCKS,
+          maybe_periodic: null, // One-time execution
+          priority: 128,
+        },
+        xcmCall,
+      };
+    })
+  );
 
   // 3. Periodic return - schedule periodic transfers back to Asset Hub
   const periodicReturnFee = estimatePeriodicReturnFee(inputs.network);
@@ -325,23 +330,68 @@ export async function buildDcaProposal(
 
 /**
  * Encode the final batch call for the referendum
- * This needs to be called with the actual chain API
+ * Uses the Asset Hub chain's TypedApi from polkadot-api via smoldot light client
  */
-export function encodeBatchCall(
-  _proposal: DcaProposal,
-  // chainApi: TypedApi from polkadot-api
-): Uint8Array {
-  // This would be implemented as:
-  // const batchCall = chainApi.tx.Utility.batch_all({
-  //   calls: [
-  //     chainApi.tx.Treasury.spend({ ... }),
-  //     chainApi.tx.Scheduler.schedule_after({ ... }), // DCA setup
-  //     chainApi.tx.Scheduler.schedule_after({ ... }), // Periodic returns
-  //   ],
-  // });
-  // return batchCall.encodedData;
+export async function encodeBatchCall(
+  proposal: DcaProposal
+) {
+  const { getAssetHubApi } = await import('../api/clients/dotAh');
+  const { Enum } = await import('polkadot-api');
+  const { DispatchRawOrigin, XcmVersionedLocation, XcmV5Junctions, XcmV5Junction } = await import('@polkadot-api/descriptors');
 
-  throw new Error('encodeBatchCall requires Asset Hub chain descriptors');
+  // Get the typed API (connects via smoldot light client)
+  const ahApi = await getAssetHubApi(proposal.inputs.network);
+  const hydrationParaId = getParachainId(proposal.inputs.network, 'HYDRATION');
+
+  // Build the destination location for Hydration
+  const hydrationDest = XcmVersionedLocation.V5({
+    parents: 1,
+    interior: XcmV5Junctions.X1(XcmV5Junction.Parachain(hydrationParaId)),
+  });
+
+  // 1. Treasury Spend - Send DOT to Hydration
+  const treasuryCall = ahApi.tx.Utility.dispatch_as({
+    as_origin: Enum('system', DispatchRawOrigin.Signed(ACCOUNTS.TREASURY)),
+    call: ahApi.tx.PolkadotXcm.execute({
+      message: proposal.calls.treasurySpend,
+      max_weight: { ref_time: 10_000_000_000n, proof_size: 100_000n },
+    }).decodedCall,
+  }).decodedCall;
+
+  // 2. Schedule DCA Setup calls (one or two depending on stablecoin selection)
+  const dcaScheduleCalls = proposal.calls.dcaSchedule.map((dcaSchedule) =>
+    ahApi.tx.Scheduler.schedule_after({
+      after: TIMING.WARM_UP_BLOCKS,
+      maybe_periodic: undefined,
+      priority: 128,
+      call: ahApi.tx.PolkadotXcm.send({
+        dest: hydrationDest,
+        message: dcaSchedule.xcmCall,
+      }).decodedCall,
+    }).decodedCall
+  );
+
+  // 3. Schedule Periodic Returns
+  const periodicCall = ahApi.tx.Scheduler.schedule_after({
+    after: proposal.calls.periodicReturn.schedulerCall.after,
+    maybe_periodic: [
+      proposal.calls.periodicReturn.schedulerCall.maybe_periodic.period,
+      proposal.calls.periodicReturn.schedulerCall.maybe_periodic.repetitions,
+    ],
+    priority: 128,
+    call: ahApi.tx.PolkadotXcm.send({
+      dest: hydrationDest,
+      message: proposal.calls.periodicReturn.xcmCall,
+    }).decodedCall,
+  }).decodedCall;
+
+  // Combine all calls
+  const allCalls = [treasuryCall, ...dcaScheduleCalls, periodicCall];
+
+  // Create the batch_all call
+  const batchCall = ahApi.tx.Utility.batch_all({ calls: allCalls });
+  const encoded = await batchCall.getEncodedData();
+  return encoded.asHex();
 }
 
 /**
