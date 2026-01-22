@@ -60,7 +60,7 @@ export function SubmitProposal({ proposal, onBack }: SubmitProposalProps) {
     <div className="space-y-6">
       {/* Current Status */}
       {status === 'idle' && (
-        <Alert>
+        <Alert variant="info">
           <AlertTitle>Ready to Submit</AlertTitle>
           <AlertDescription>
             Click the button below to connect your wallet and submit the referendum proposal.
@@ -69,7 +69,7 @@ export function SubmitProposal({ proposal, onBack }: SubmitProposalProps) {
       )}
 
       {status === 'connecting' && (
-        <Alert>
+        <Alert variant="info">
           <Loader2 className="h-4 w-4 animate-spin" />
           <AlertTitle>Connecting to Wallet</AlertTitle>
           <AlertDescription>
@@ -79,7 +79,7 @@ export function SubmitProposal({ proposal, onBack }: SubmitProposalProps) {
       )}
 
       {status === 'signing' && (
-        <Alert>
+        <Alert variant="info">
           <Loader2 className="h-4 w-4 animate-spin" />
           <AlertTitle>Awaiting Signature</AlertTitle>
           <AlertDescription>
@@ -89,7 +89,7 @@ export function SubmitProposal({ proposal, onBack }: SubmitProposalProps) {
       )}
 
       {status === 'submitting' && (
-        <Alert>
+        <Alert variant="info">
           <Loader2 className="h-4 w-4 animate-spin" />
           <AlertTitle>Submitting Proposal</AlertTitle>
           <AlertDescription>
@@ -133,38 +133,38 @@ export function SubmitProposal({ proposal, onBack }: SubmitProposalProps) {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="space-y-3">
-            <div className="flex justify-between">
-              <span className="text-sm font-medium">Network:</span>
-              <span className="text-sm text-gray-600">
+          <div className="divide-y divide-neutral-200">
+            <div className="flex justify-between py-3 first:pt-0">
+              <span className="text-sm font-medium text-neutral-700">Network:</span>
+              <span className="text-sm text-neutral-600">
                 {proposal.inputs.network === 'polkadot' ? 'Polkadot' : 'Paseo'}
               </span>
             </div>
 
-            <div className="flex justify-between">
-              <span className="text-sm font-medium">DOT Amount:</span>
-              <span className="text-sm text-gray-600">
+            <div className="flex justify-between py-3">
+              <span className="text-sm font-medium text-neutral-700">DOT Amount:</span>
+              <span className="text-sm text-neutral-600">
                 {(Number(proposal.inputs.dotAmount) / 1e10).toLocaleString()} DOT
               </span>
             </div>
 
-            <div className="flex justify-between">
-              <span className="text-sm font-medium">Target:</span>
-              <span className="text-sm text-gray-600">
+            <div className="flex justify-between py-3">
+              <span className="text-sm font-medium text-neutral-700">Target:</span>
+              <span className="text-sm text-neutral-600">
                 {proposal.inputs.stablecoin}
               </span>
             </div>
 
-            <div className="flex justify-between">
-              <span className="text-sm font-medium">Duration:</span>
-              <span className="text-sm text-gray-600">
+            <div className="flex justify-between py-3">
+              <span className="text-sm font-medium text-neutral-700">Duration:</span>
+              <span className="text-sm text-neutral-600">
                 {proposal.inputs.dcaDurationDays} days
               </span>
             </div>
 
-            <div className="flex justify-between">
-              <span className="text-sm font-medium">Total Trades:</span>
-              <span className="text-sm text-gray-600">
+            <div className="flex justify-between py-3 last:pb-0">
+              <span className="text-sm font-medium text-neutral-700">Total Trades:</span>
+              <span className="text-sm text-neutral-600">
                 {proposal.calculations.totalTrades}
               </span>
             </div>
@@ -178,7 +178,7 @@ export function SubmitProposal({ proposal, onBack }: SubmitProposalProps) {
           <CardTitle>Requirements</CardTitle>
         </CardHeader>
         <CardContent>
-          <ul className="list-disc list-inside space-y-2 text-sm text-gray-600">
+          <ul className="list-disc list-inside space-y-2 text-sm text-neutral-600">
             <li>
               You need a Polkadot wallet (Talisman, Subwallet, PolkadotJS, etc.)
             </li>
@@ -205,7 +205,7 @@ export function SubmitProposal({ proposal, onBack }: SubmitProposalProps) {
             <CardTitle>Next Steps</CardTitle>
           </CardHeader>
           <CardContent>
-            <ol className="list-decimal list-inside space-y-2 text-sm text-gray-600">
+            <ol className="list-decimal list-inside space-y-2 text-sm text-neutral-600">
               <li>
                 Track your proposal on governance platforms:
                 <ul className="list-disc list-inside ml-4 mt-1">

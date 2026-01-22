@@ -3,6 +3,7 @@
  * Manages the multi-step wizard flow
  */
 
+import { Check } from 'lucide-react';
 import { useWizardState } from './use-wizard-state';
 import { DcaWizardForm } from './DcaWizardForm';
 import { ProposalPreview } from './ProposalPreview';
@@ -28,14 +29,14 @@ export function DcaWizard() {
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 dark:bg-gray-900 py-8">
+    <div className="min-h-screen bg-neutral-50 py-8">
       <div className="container mx-auto px-4 max-w-4xl">
         {/* Header */}
         <div className="mb-8">
-          <h1 className="text-4xl font-bold text-gray-900 dark:text-gray-100">
+          <h1 className="text-3xl font-bold text-neutral-900">
             DCA Wizard
           </h1>
-          <p className="text-lg text-gray-600 dark:text-gray-400 mt-2">
+          <p className="text-base text-neutral-600 mt-2">
             Create a governance proposal for Dollar Cost Averaging treasury operations
           </p>
         </div>
@@ -49,9 +50,9 @@ export function DcaWizard() {
               active={state.currentStep === 'form'}
               completed={state.currentStep !== 'form'}
             />
-            <div className="flex-1 h-1 bg-gray-200 dark:bg-gray-700 mx-4">
+            <div className="flex-1 h-1 bg-neutral-200 mx-4">
               <div
-                className={`h-full bg-blue-600 transition-all duration-300 ${
+                className={`h-full bg-primary-500 transition-all duration-300 ${
                   state.currentStep === 'form' ? 'w-0' : 'w-full'
                 }`}
               />
@@ -62,9 +63,9 @@ export function DcaWizard() {
               active={state.currentStep === 'preview'}
               completed={state.currentStep === 'submit'}
             />
-            <div className="flex-1 h-1 bg-gray-200 dark:bg-gray-700 mx-4">
+            <div className="flex-1 h-1 bg-neutral-200 mx-4">
               <div
-                className={`h-full bg-blue-600 transition-all duration-300 ${
+                className={`h-full bg-primary-500 transition-all duration-300 ${
                   state.currentStep === 'submit' ? 'w-full' : 'w-0'
                 }`}
               />
@@ -114,21 +115,21 @@ function StepIndicator({ step, label, active, completed }: StepIndicatorProps) {
       <div
         className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-semibold transition-colors ${
           active
-            ? 'bg-blue-600 text-white'
+            ? 'bg-primary-100 text-primary-900 shadow-md border-2 border-primary-600'
             : completed
-            ? 'bg-green-600 text-white'
-            : 'bg-gray-200 text-gray-600 dark:bg-gray-700 dark:text-gray-400'
+            ? 'bg-success-100 text-success-900 shadow-md border-2 border-success-600'
+            : 'bg-neutral-200 text-neutral-600'
         }`}
       >
-        {completed ? '✓' : step}
+        {completed ? <Check className="w-5 h-5" /> : step}
       </div>
       <span
-        className={`mt-2 text-sm font-medium ${
+        className={`mt-2 text-sm ${
           active
-            ? 'text-blue-600'
+            ? 'text-neutral-900 font-bold'
             : completed
-            ? 'text-green-600'
-            : 'text-gray-500 dark:text-gray-400'
+            ? 'text-neutral-800 font-semibold'
+            : 'text-neutral-500 font-medium'
         }`}
       >
         {label}
