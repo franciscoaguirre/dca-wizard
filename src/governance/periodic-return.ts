@@ -99,14 +99,13 @@ export function calculateSplitAmounts(
 }
 
 /**
- * Estimate fee for periodic return operation
- * This should be calculated based on XCM weight and fee schedule
- * For now, using a conservative estimate
+ * Estimate DOT fee for periodic return XCM execution on Hydration
+ * This is paid from the Asset Hub sovereign's fee stash
  */
 export function estimatePeriodicReturnFee(): bigint {
-  // Conservative estimate: 0.1 USDT per return for fees
+  // Conservative estimate: 0.05 DOT per return for XCM fees on Hydration
   // In production, this should query the actual fee schedule
-  return BigInt(100000); // 0.1 USDT (6 decimals)
+  return BigInt(5e8); // 0.05 DOT (10 decimals)
 }
 
 /**
@@ -170,9 +169,10 @@ export function buildPeriodicReturnSchedulerCall(
 export function validatePeriodicReturnParams(
   returnFrequencyDays: number,
   numberOfReturns: number,
-  totalDcaDurationDays: number
-): { valid: boolean; errors: string[] } {
+  _totalDcaDurationDays: number
+): { valid: boolean; errors: string[]; warnings: string[] } {
   const errors: string[] = [];
+  const warnings: string[] = [];
 
   if (returnFrequencyDays <= 0) {
     errors.push('Return frequency must be greater than 0 days');
@@ -182,17 +182,9 @@ export function validatePeriodicReturnParams(
     errors.push('Number of returns must be greater than 0');
   }
 
-  // Check if return schedule fits within DCA duration
-  const totalReturnDuration = returnFrequencyDays * numberOfReturns;
-  if (totalReturnDuration < totalDcaDurationDays) {
-    errors.push(
-      `Returns will complete (${totalReturnDuration} days) before DCA finishes (${totalDcaDurationDays} days). ` +
-      'Consider increasing return frequency or number of returns.'
-    );
-  }
-
   return {
     valid: errors.length === 0,
     errors,
+    warnings,
   };
 }

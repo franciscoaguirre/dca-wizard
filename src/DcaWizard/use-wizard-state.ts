@@ -31,7 +31,6 @@ export interface WizardState {
   returnFrequencyDays: number;
   numberOfReturns: number;
   treasurySplitPercent: number;
-  salarySplitPercent: number;
 
   // DOT price (from oracle/API)
   dotPriceUsd: number;
@@ -52,7 +51,6 @@ export interface WizardState {
  * State Actions
  */
 export type WizardAction =
-  | { type: 'SET_NETWORK'; payload: NetworkType }
   | { type: 'SET_DOT_AMOUNT'; payload: string }
   | { type: 'SET_STABLECOIN'; payload: StablecoinType }
   | { type: 'SET_DCA_FREQUENCY'; payload: number }
@@ -61,7 +59,6 @@ export type WizardAction =
   | { type: 'SET_RETURN_FREQUENCY'; payload: number }
   | { type: 'SET_NUMBER_OF_RETURNS'; payload: number }
   | { type: 'SET_TREASURY_SPLIT'; payload: number }
-  | { type: 'SET_SALARY_SPLIT'; payload: number }
   | { type: 'SET_DOT_PRICE'; payload: number }
   | { type: 'SET_FIELD_TOUCHED'; payload: string }
   | { type: 'BUILD_PROPOSAL_START' }
@@ -83,7 +80,6 @@ const initialState: WizardState = {
   returnFrequencyDays: DEFAULTS.RETURN_FREQUENCY_DAYS,
   numberOfReturns: DEFAULTS.NUMBER_OF_RETURNS,
   treasurySplitPercent: DEFAULTS.TREASURY_SPLIT_PERCENT,
-  salarySplitPercent: DEFAULTS.SALARY_SPLIT_PERCENT,
   dotPriceUsd: 5.0, // Default, should be fetched from API
   errors: {},
   touched: {},
@@ -95,7 +91,7 @@ const initialState: WizardState = {
 /**
  * Type-safe field accessor for WizardState
  */
-type ValidatableField = 'dotAmount' | 'dcaFrequencyBlocks' | 'dcaDurationDays' | 'slippagePercent' | 'numberOfReturns' | 'treasurySplitPercent' | 'salarySplitPercent';
+type ValidatableField = 'dotAmount' | 'dcaFrequencyBlocks' | 'dcaDurationDays' | 'slippagePercent' | 'numberOfReturns' | 'treasurySplitPercent';
 
 function getFieldValue(state: WizardState, field: ValidatableField): WizardState[ValidatableField] {
   return state[field];
@@ -104,7 +100,7 @@ function getFieldValue(state: WizardState, field: ValidatableField): WizardState
 /**
  * Validate individual field
  */
-function validateField(field: string, value: WizardState[ValidatableField], state: WizardState): string | null {
+function validateField(field: string, value: WizardState[ValidatableField], _state: WizardState): string | null {
   switch (field) {
     case 'dotAmount': {
       const strValue = value as string;
@@ -157,13 +153,10 @@ function validateField(field: string, value: WizardState[ValidatableField], stat
       return null;
     }
 
-    case 'treasurySplitPercent':
-    case 'salarySplitPercent': {
+    case 'treasurySplitPercent': {
       const numValue = value as number;
-      const treasuryPercent = field === 'treasurySplitPercent' ? numValue : state.treasurySplitPercent;
-      const salaryPercent = field === 'salarySplitPercent' ? numValue : state.salarySplitPercent;
-      if (treasuryPercent + salaryPercent !== 100) {
-        return 'Treasury and salary percentages must sum to 100';
+      if (numValue < 0 || numValue > 100) {
+        return 'Treasury split must be between 0 and 100';
       }
       return null;
     }
@@ -216,13 +209,17 @@ function updateFieldWithValidation<K extends ValidatableField>(
 }
 
 /**
+ * Calculate number of returns needed to cover the DCA duration
+ */
+function calculateNumberOfReturns(durationDays: number, returnFrequencyDays: number): number {
+  return Math.ceil(durationDays / returnFrequencyDays);
+}
+
+/**
  * Reducer
  */
 function wizardReducer(state: WizardState, action: WizardAction): WizardState {
   switch (action.type) {
-    case 'SET_NETWORK':
-      return { ...state, network: action.payload };
-
     case 'SET_DOT_AMOUNT':
       return updateFieldWithValidation(state, 'dotAmount', action.payload);
 
@@ -232,27 +229,27 @@ function wizardReducer(state: WizardState, action: WizardAction): WizardState {
     case 'SET_DCA_FREQUENCY':
       return updateFieldWithValidation(state, 'dcaFrequencyBlocks', action.payload);
 
-    case 'SET_DCA_DURATION':
-      return updateFieldWithValidation(state, 'dcaDurationDays', action.payload);
+    case 'SET_DCA_DURATION': {
+      const newState = updateFieldWithValidation(state, 'dcaDurationDays', action.payload);
+      // Auto-calculate number of returns to cover the full duration
+      const numberOfReturns = calculateNumberOfReturns(action.payload, newState.returnFrequencyDays);
+      return { ...newState, numberOfReturns };
+    }
 
     case 'SET_SLIPPAGE':
       return updateFieldWithValidation(state, 'slippagePercent', action.payload);
 
-    case 'SET_RETURN_FREQUENCY':
-      return { ...state, returnFrequencyDays: action.payload };
+    case 'SET_RETURN_FREQUENCY': {
+      // Auto-calculate number of returns when frequency changes
+      const numberOfReturns = calculateNumberOfReturns(state.dcaDurationDays, action.payload);
+      return { ...state, returnFrequencyDays: action.payload, numberOfReturns };
+    }
 
     case 'SET_NUMBER_OF_RETURNS':
       return updateFieldWithValidation(state, 'numberOfReturns', action.payload);
 
-    case 'SET_TREASURY_SPLIT': {
-      const updated = updateFieldWithValidation(state, 'treasurySplitPercent', action.payload);
-      return { ...updated, salarySplitPercent: 100 - action.payload };
-    }
-
-    case 'SET_SALARY_SPLIT': {
-      const updated = updateFieldWithValidation(state, 'salarySplitPercent', action.payload);
-      return { ...updated, treasurySplitPercent: 100 - action.payload };
-    }
+    case 'SET_TREASURY_SPLIT':
+      return updateFieldWithValidation(state, 'treasurySplitPercent', action.payload);
 
     case 'SET_DOT_PRICE':
       return { ...state, dotPriceUsd: action.payload };
@@ -323,7 +320,7 @@ export function useWizardState() {
           returnFrequencyDays: state.returnFrequencyDays,
           numberOfReturns: state.numberOfReturns,
           treasurySplitPercent: state.treasurySplitPercent,
-          salarySplitPercent: state.salarySplitPercent,
+          salarySplitPercent: 100 - state.treasurySplitPercent,
         };
 
         const proposal = await buildDcaProposal(inputs, state.dotPriceUsd);
@@ -338,7 +335,6 @@ export function useWizardState() {
 
     return () => clearTimeout(timer);
   }, [
-    state.network,
     state.dotAmount,
     state.stablecoin,
     state.dcaFrequencyBlocks,
@@ -347,7 +343,6 @@ export function useWizardState() {
     state.returnFrequencyDays,
     state.numberOfReturns,
     state.treasurySplitPercent,
-    state.salarySplitPercent,
     state.dotPriceUsd,
   ]);
 

@@ -18,10 +18,11 @@ import {
 } from './xcm-messages';
 import {
   buildDcaScheduleCalls,
-  calculateSovereignAccount,
+  getSovereignAccount,
   calculateTotalTrades,
   calculateDotPerTrade,
   encodeDcaScheduleCall,
+  estimateStablecoinPerTrade,
 } from './dca-setup';
 import {
   calculatePeriodicReturnParams,
@@ -72,6 +73,7 @@ export interface DcaCalculations {
   totalDurationBlocks: number;
   sovereignAccount: string; // SS58 address
   feeEstimate: bigint;
+  feeStash: bigint; // DOT fee stash for XCM execution on Hydration
 }
 
 /**
@@ -119,6 +121,32 @@ function calculateTotalFees(numberOfReturns: number): bigint {
   const totalFees = (baseFees * (100n + bufferPercent)) / 100n;
 
   return totalFees;
+}
+
+/**
+ * Calculate DOT fee stash for XCM operations on Hydration
+ * This stash is deposited to Asset Hub's sovereign account on Hydration
+ * and pays for:
+ * - DCA schedule XCM execution fees
+ * - Periodic return XCM execution fees
+ */
+function calculateFeeStash(stablecoin: StablecoinType, numberOfReturns: number): bigint {
+  // Number of DCA schedules depends on stablecoin selection
+  const dcaScheduleCount = stablecoin === 'BOTH' ? 2 : 1;
+
+  // Fee estimates per operation (in DOT with 10 decimals)
+  const dcaFeePerSchedule = BigInt(5e8); // 0.05 DOT per DCA schedule setup
+  const returnFeePerExecution = BigInt(5e8); // 0.05 DOT per periodic return
+
+  // Calculate total fees needed
+  const dcaFees = dcaFeePerSchedule * BigInt(dcaScheduleCount);
+  const returnFees = returnFeePerExecution * BigInt(numberOfReturns);
+  const baseFeeStash = dcaFees + returnFees;
+
+  // Add 20% buffer for safety margin
+  const feeStash = (baseFeeStash * 120n) / 100n;
+
+  return feeStash;
 }
 
 /**
@@ -229,9 +257,9 @@ export async function buildDcaProposal(
     };
   }
 
-  // Calculate sovereign account for Collectives parachain
+  // Get sovereign account for Collectives parachain from Hydration's runtime API
   const collectivesParaId = getParachainId(inputs.network, 'COLLECTIVES');
-  const sovereignAccount = calculateSovereignAccount(collectivesParaId);
+  const sovereignAccount = await getSovereignAccount(inputs.network, collectivesParaId);
 
   // Calculate DCA parameters
   const totalTrades = calculateTotalTrades(inputs.dcaDurationDays, inputs.dcaFrequencyBlocks);
@@ -246,6 +274,9 @@ export async function buildDcaProposal(
 
   // Calculate fees
   const feeEstimate = calculateTotalFees(inputs.numberOfReturns);
+
+  // Calculate fee stash for XCM operations on Hydration
+  const feeStash = calculateFeeStash(inputs.stablecoin, inputs.numberOfReturns);
 
   // Calculate periodic return parameters
   const periodicReturnSchedule = calculatePeriodicReturnParams(
@@ -265,24 +296,29 @@ export async function buildDcaProposal(
     totalDurationBlocks: daysToBlocks(inputs.dcaDurationDays),
     sovereignAccount,
     feeEstimate,
+    feeStash,
   };
 
   // Build calls
 
-  // 1. Treasury spend - send DOT to Hydration
+  // 1. Treasury spend - send DOT to Hydration (includes fee stash for XCM operations)
   const treasurySpend = buildTreasuryToHydrationXcm(
     inputs.network,
     inputs.dotAmount,
-    feeEstimate
+    feeEstimate,
+    feeStash
   );
 
   // 2. DCA schedule - set up DCA on Hydration (after warm-up period)
+  const expectedOutputPerTrade = estimateStablecoinPerTrade(dotPerTrade, dotPriceInUsd);
   const dcaScheduleCalls = buildDcaScheduleCalls(
     inputs.network,
     sovereignAccount,
     inputs.stablecoin,
     inputs.dcaFrequencyBlocks,
-    inputs.slippagePercent
+    inputs.slippagePercent,
+    dotPerTrade,
+    expectedOutputPerTrade
   );
 
   const dcaSchedule = await Promise.all(
@@ -447,6 +483,8 @@ Split Configuration:
 - Fellowship Treasury: ${inputs.treasurySplitPercent}%
 - Fellowship Salary: ${inputs.salarySplitPercent}%
 
-Estimated Fees: ${Number(calculations.feeEstimate) / 1e10} DOT
+Fees:
+- Estimated Fees (Asset Hub): ${Number(calculations.feeEstimate) / 1e10} DOT
+- XCM Fee Stash (Hydration): ${Number(calculations.feeStash) / 1e10} DOT
   `.trim();
 }

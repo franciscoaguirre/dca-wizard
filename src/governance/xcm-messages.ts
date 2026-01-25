@@ -55,9 +55,11 @@ export function accountOnAssetHub(accountIdBytes: Uint8Array) {
 
 /**
  * Helper: Create native DOT asset ID
+ * DOT (relay chain native) is always { parents: 1, interior: Here }
+ * from any parachain's perspective
  */
 export const DOT_ASSET_ID = {
-  parents: 0,
+  parents: 1,
   interior: XcmV5Junctions.Here(),
 };
 
@@ -158,22 +160,26 @@ export function decodeAddress(address: string): Uint8Array {
 
 /**
  * Build XCM to send DOT from Asset Hub treasury to Hydration
- * This transfers DOT to the Collectives sovereign account on Hydration
+ * This transfers DOT to both:
+ * - Asset Hub's sovereign account on Hydration (fee stash for XCM operations)
+ * - Collectives sovereign account on Hydration (main pool for DCA trading)
  */
 export function buildTreasuryToHydrationXcm(
   network: NetworkType,
   dotAmount: bigint,
-  feeAmount: bigint
+  feeAmount: bigint,
+  feeStashAmount: bigint
 ): XcmVersionedXcm {
   const hydrationParaId = getParachainId(network, 'HYDRATION');
   const collectivesParaId = getParachainId(network, 'COLLECTIVES');
+  const assetHubParaId = getParachainId(network, 'ASSET_HUB');
 
   return XcmVersionedXcm.V5([
-    // 1. Withdraw DOT from treasury
+    // 1. Withdraw DOT from treasury including fee stash
     XcmV5Instruction.WithdrawAsset([
       {
         id: DOT_ASSET_ID,
-        fun: XcmV3MultiassetFungibility.Fungible(dotAmount + feeAmount),
+        fun: XcmV3MultiassetFungibility.Fungible(dotAmount + feeAmount + feeStashAmount),
       },
     ]),
 
@@ -185,12 +191,12 @@ export function buildTreasuryToHydrationXcm(
       },
     }),
 
-    // 3. Deposit reserve asset to Hydration
+    // 3. Deposit reserve asset to Hydration with two beneficiaries
     XcmV5Instruction.DepositReserveAsset({
       assets: XcmV5AssetFilter.Wild(XcmV5WildAsset.AllCounted(1)),
       dest: parachainLocation(hydrationParaId),
       xcm: [
-        // On Hydration: buy execution (must use BuyExecution, not PayFees for V4 compat)
+        // On Hydration: buy execution
         XcmV5Instruction.BuyExecution({
           fees: {
             id: DOT_ASSET_ID,
@@ -199,7 +205,18 @@ export function buildTreasuryToHydrationXcm(
           weight_limit: XcmV3WeightLimit.Unlimited(),
         }),
 
-        // Deposit to Collectives sovereign account
+        // FIRST: Fee stash to Asset Hub's sovereign account
+        XcmV5Instruction.DepositAsset({
+          assets: XcmV5AssetFilter.Definite([
+            {
+              id: DOT_ASSET_ID,
+              fun: XcmV3MultiassetFungibility.Fungible(feeStashAmount),
+            },
+          ]),
+          beneficiary: parachainLocation(assetHubParaId),
+        }),
+
+        // SECOND: Remainder to Collectives sovereign account
         XcmV5Instruction.DepositAsset({
           assets: XcmV5AssetFilter.Wild(XcmV5WildAsset.AllCounted(1)),
           beneficiary: parachainLocation(collectivesParaId),
@@ -257,12 +274,19 @@ export function buildDcaScheduleXcm(
  * Build XCM for periodic return with configurable treasury/salary split
  * This transfers stablecoins from Hydration back to Asset Hub
  * with split to Fellowship Treasury and Salary based on provided percentage
+ *
+ * Flow:
+ * 1. Withdraw DOT from Asset Hub's sovereign account (fee stash) for XCM fees
+ * 2. Pay fees in DOT
+ * 3. Alias to Collectives sovereign account
+ * 4. Withdraw stablecoins from Collectives sovereign
+ * 5. InitiateReserveWithdraw to send stablecoins back to Asset Hub
  */
 export function buildPeriodicReturnXcm(
   network: NetworkType,
   usdtAmount: bigint,
   usdcAmount: bigint,
-  feeAmount: bigint,
+  feeAmount: bigint, // DOT fee for XCM execution on Hydration
   treasurySplitPercent: number = 70
 ): XcmVersionedXcm {
   const assetHubParaId = getParachainId(network, 'ASSET_HUB');
@@ -284,66 +308,103 @@ export function buildPeriodicReturnXcm(
   const usdtAssetIdLocal = getUsdtAssetId(network);
   const usdcAssetIdLocal = getUsdcAssetId(network);
 
+  // Build withdraw assets array for stablecoins - only include non-zero amounts
+  const withdrawStableAssets: Array<{
+    id: typeof usdtAssetId;
+    fun: ReturnType<typeof XcmV3MultiassetFungibility.Fungible>;
+  }> = [];
+
+  if (usdtAmount > 0n) {
+    withdrawStableAssets.push({
+      id: usdtAssetId,
+      fun: XcmV3MultiassetFungibility.Fungible(usdtAmount),
+    });
+  }
+  if (usdcAmount > 0n) {
+    withdrawStableAssets.push({
+      id: usdcAssetId,
+      fun: XcmV3MultiassetFungibility.Fungible(usdcAmount),
+    });
+  }
+
+  // Guard against edge case where both amounts are 0
+  if (withdrawStableAssets.length === 0) {
+    throw new Error('Cannot build periodic return XCM: both USDT and USDC amounts are 0');
+  }
+
+  const assetCount = withdrawStableAssets.length;
+
+  // Build treasury deposit assets - only include non-zero amounts
+  const treasuryDepositAssets: Array<{
+    id: typeof usdtAssetIdLocal;
+    fun: ReturnType<typeof XcmV3MultiassetFungibility.Fungible>;
+  }> = [];
+
+  if (usdtTreasury > 0n) {
+    treasuryDepositAssets.push({
+      id: usdtAssetIdLocal,
+      fun: XcmV3MultiassetFungibility.Fungible(usdtTreasury),
+    });
+  }
+  if (usdcTreasury > 0n) {
+    treasuryDepositAssets.push({
+      id: usdcAssetIdLocal,
+      fun: XcmV3MultiassetFungibility.Fungible(usdcTreasury),
+    });
+  }
+
+  // Determine fee asset for BuyExecution on Asset Hub - prefer USDT if available
+  const feeAssetLocal = usdtAmount > 0n ? usdtAssetIdLocal : usdcAssetIdLocal;
+  // Stablecoin fee amount for Asset Hub execution (use a reasonable estimate)
+  const stablecoinFeeOnAssetHub = BigInt(100000); // 0.1 USDT/USDC (6 decimals)
+
   return XcmVersionedXcm.V5([
-    // 1. Withdraw stables from Collectives sovereign account on Hydration
+    // 1. Withdraw DOT for fees from Asset Hub's sovereign account (fee stash)
     XcmV5Instruction.WithdrawAsset([
       {
-        id: usdtAssetId,
-        fun: XcmV3MultiassetFungibility.Fungible(usdtAmount),
-      },
-      {
-        id: usdcAssetId,
-        fun: XcmV3MultiassetFungibility.Fungible(usdcAmount),
+        id: DOT_ASSET_ID,
+        fun: XcmV3MultiassetFungibility.Fungible(feeAmount),
       },
     ]),
 
-    // 2. Pay fees on Hydration (using USDT)
+    // 2. Pay fees in DOT on Hydration
     XcmV5Instruction.BuyExecution({
       fees: {
-        id: usdtAssetId,
+        id: DOT_ASSET_ID,
         fun: XcmV3MultiassetFungibility.Fungible(feeAmount),
       },
       weight_limit: XcmV3WeightLimit.Unlimited(),
     }),
 
-    // 3. Change origin to Collectives sovereign account
+    // 3. Alias origin to Collectives sovereign account
     XcmV5Instruction.AliasOrigin(parachainLocation(collectivesParaId)),
 
-    // 4. Initiate reserve withdraw back to Asset Hub with nested instructions
+    // 4. Withdraw stablecoins from Collectives sovereign account
+    XcmV5Instruction.WithdrawAsset(withdrawStableAssets),
+
+    // 5. Initiate reserve withdraw back to Asset Hub with nested instructions
     XcmV5Instruction.InitiateReserveWithdraw({
-      assets: XcmV5AssetFilter.Wild(XcmV5WildAsset.AllCounted(2)),
+      assets: XcmV5AssetFilter.Wild(XcmV5WildAsset.AllCounted(assetCount)),
       reserve: parachainLocation(assetHubParaId),
       xcm: [
-        // On Asset Hub: Clear origin
-        XcmV5Instruction.ClearOrigin(),
-
-        // Pay fees on Asset Hub (using USDT)
+        // Pay fees on Asset Hub using stablecoins
         XcmV5Instruction.BuyExecution({
           fees: {
-            id: usdtAssetIdLocal,
-            fun: XcmV3MultiassetFungibility.Fungible(feeAmount),
+            id: feeAssetLocal,
+            fun: XcmV3MultiassetFungibility.Fungible(stablecoinFeeOnAssetHub),
           },
           weight_limit: XcmV3WeightLimit.Unlimited(),
         }),
 
-        // Deposit 70% to Fellowship Treasury
+        // Deposit treasury percentage to Fellowship Treasury (only non-zero assets)
         XcmV5Instruction.DepositAsset({
-          assets: XcmV5AssetFilter.Definite([
-            {
-              id: usdtAssetIdLocal,
-              fun: XcmV3MultiassetFungibility.Fungible(usdtTreasury),
-            },
-            {
-              id: usdcAssetIdLocal,
-              fun: XcmV3MultiassetFungibility.Fungible(usdcTreasury),
-            },
-          ]),
+          assets: XcmV5AssetFilter.Definite(treasuryDepositAssets),
           beneficiary: accountOnAssetHub(fellowshipTreasuryId),
         }),
 
-        // Deposit remaining 30% to Fellowship Salary
+        // Deposit remaining to Fellowship Salary using Wild
         XcmV5Instruction.DepositAsset({
-          assets: XcmV5AssetFilter.Wild(XcmV5WildAsset.AllCounted(2)),
+          assets: XcmV5AssetFilter.Wild(XcmV5WildAsset.AllCounted(assetCount)),
           beneficiary: accountOnAssetHub(fellowshipSalaryId),
         }),
       ],

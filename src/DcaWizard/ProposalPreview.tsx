@@ -1,16 +1,15 @@
 /**
  * Proposal Preview Component
- * Shows detailed preview of the DCA proposal before submission
+ * Shows a compact preview of the DCA proposal before submission
  */
 
 import { useState, useEffect } from 'react';
 import type { DcaProposal } from '../governance/builder';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Alert, AlertDescription, AlertTitle } from '../components/ui/alert';
 import { ArrowRight, AlertTriangle, Info, Code2, Copy, Check } from 'lucide-react';
 import {
-  getTransactionBreakdown,
   encodeProposalCall,
   DESCRIPTOR_INSTRUCTIONS,
 } from '../governance/call-encoder';
@@ -22,14 +21,12 @@ interface ProposalPreviewProps {
 }
 
 export function ProposalPreview({ proposal, onBack, onNext }: ProposalPreviewProps) {
-  const { inputs, calculations, validation } = proposal;
+  const { inputs, calculations } = proposal;
   const [showInstructions, setShowInstructions] = useState(false);
   const [copied, setCopied] = useState(false);
   const [encoded, setEncoded] = useState<string | null>(null);
   const [encodingError, setEncodingError] = useState<string | null>(null);
   const [isEncoding, setIsEncoding] = useState(false);
-
-  const transactionBreakdown = getTransactionBreakdown(proposal);
 
   // Attempt to encode the proposal on mount
   useEffect(() => {
@@ -48,16 +45,22 @@ export function ProposalPreview({ proposal, onBack, onNext }: ProposalPreviewPro
     setTimeout(() => setCopied(false), 2000);
   };
 
+  // Calculate estimated stablecoin per return
+  const estimatedPerReturn =
+    (calculations?.estimatedUsdtPerReturn ?? 0n) > 0n
+      ? Number(calculations.estimatedUsdtPerReturn) / 1e6
+      : Number(calculations?.estimatedUsdcPerReturn ?? 0n) / 1e6;
+
   return (
     <div className="space-y-6">
       {/* Warnings */}
-      {validation.warnings.length > 0 && (
+      {proposal.validation.warnings.length > 0 && (
         <Alert variant="warning">
           <AlertTriangle className="h-4 w-4" />
           <AlertTitle>Important Considerations</AlertTitle>
           <AlertDescription>
             <ul className="list-disc list-inside space-y-1 mt-2">
-              {validation.warnings.map((warning, idx) => (
+              {proposal.validation.warnings.map((warning, idx) => (
                 <li key={idx}>{warning}</li>
               ))}
             </ul>
@@ -65,284 +68,118 @@ export function ProposalPreview({ proposal, onBack, onNext }: ProposalPreviewPro
         </Alert>
       )}
 
-      {/* Summary */}
+      {/* Consolidated Summary */}
       <Card>
-        <CardHeader>
+        <CardHeader className="pb-2">
           <CardTitle>Proposal Summary</CardTitle>
-          <CardDescription>
-            Review the complete DCA strategy configuration
-          </CardDescription>
         </CardHeader>
         <CardContent>
-          <div className="space-y-4">
-            {/* Network */}
-            <div>
-              <h4 className="text-sm font-semibold text-neutral-700">Network</h4>
-              <p className="text-sm text-neutral-600">
-                {inputs.network === 'polkadot' ? 'Polkadot Mainnet' : 'Paseo Testnet'}
-              </p>
-            </div>
-
-            {/* Treasury Amount */}
-            <div>
-              <h4 className="text-sm font-semibold text-neutral-700">Treasury Allocation</h4>
-              <p className="text-sm text-neutral-600">
-                {(Number(inputs.dotAmount) / 1e10).toLocaleString()} DOT
-              </p>
-              <p className="text-xs text-neutral-500">
-                + {(Number(calculations.feeEstimate) / 1e10).toFixed(2)} DOT estimated fees
-              </p>
-            </div>
-
-            {/* Target Stablecoin */}
-            <div>
-              <h4 className="text-sm font-semibold text-neutral-700">Target Stablecoin</h4>
-              <p className="text-sm text-neutral-600">{inputs.stablecoin}</p>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* DCA Strategy */}
-      <Card>
-        <CardHeader>
-          <CardTitle>DCA Strategy</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <h4 className="text-sm font-semibold text-neutral-700">Trade Frequency</h4>
-                <p className="text-sm text-neutral-600">
-                  Every {inputs.dcaFrequencyBlocks} blocks
-                </p>
-                <p className="text-xs text-neutral-500">
-                  ~{Math.round((inputs.dcaFrequencyBlocks * 6) / 60)} minutes
-                </p>
-              </div>
-
-              <div>
-                <h4 className="text-sm font-semibold text-neutral-700">Duration</h4>
-                <p className="text-sm text-neutral-600">{inputs.dcaDurationDays} days</p>
-                <p className="text-xs text-neutral-500">
-                  {calculations.totalDurationBlocks.toLocaleString()} blocks
-                </p>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <h4 className="text-sm font-semibold text-neutral-700">Total Trades</h4>
-                <p className="text-sm text-neutral-600">
-                  {calculations.totalTrades.toLocaleString()}
-                </p>
-              </div>
-
-              <div>
-                <h4 className="text-sm font-semibold text-neutral-700">DOT per Trade</h4>
-                <p className="text-sm text-neutral-600">
-                  {(Number(calculations.dotPerTrade) / 1e10).toFixed(4)} DOT
-                </p>
-              </div>
-            </div>
-
-            <div>
-              <h4 className="text-sm font-semibold text-neutral-700">Slippage Tolerance</h4>
-              <p className="text-sm text-neutral-600">{inputs.slippagePercent}%</p>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Expected Output */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Estimated Stablecoin Output</CardTitle>
-          <CardDescription>
-            Based on current DOT price (estimates may vary)
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-3">
-            {calculations.estimatedUsdtTotal > 0n && (
-              <div className="flex justify-between items-center p-3 bg-neutral-100 rounded-lg">
-                <span className="text-sm font-medium text-neutral-700">Total USDT</span>
-                <span className="text-sm text-neutral-600">
-                  ${(Number(calculations.estimatedUsdtTotal) / 1e6).toLocaleString()}
+          <div className="space-y-6">
+            {/* Converting section */}
+            <div className="pb-4 border-b border-neutral-200">
+              <p className="text-sm text-neutral-500 mb-1">Converting</p>
+              <p className="text-xl font-semibold text-neutral-800">
+                {(Number(inputs?.dotAmount ?? 0n) / 1e10).toLocaleString()} DOT
+                <span className="text-neutral-400 mx-2">→</span>
+                <span className="text-success-600">
+                  ~${(
+                    (Number(calculations?.estimatedUsdtTotal ?? 0n) +
+                      Number(calculations?.estimatedUsdcTotal ?? 0n)) /
+                    1e6
+                  ).toLocaleString()}{' '}
+                  {inputs?.stablecoin ?? 'USDT'}
                 </span>
-              </div>
-            )}
-
-            {calculations.estimatedUsdcTotal > 0n && (
-              <div className="flex justify-between items-center p-3 bg-neutral-100 rounded-lg">
-                <span className="text-sm font-medium text-neutral-700">Total USDC</span>
-                <span className="text-sm text-neutral-600">
-                  ${(Number(calculations.estimatedUsdcTotal) / 1e6).toLocaleString()}
-                </span>
-              </div>
-            )}
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Return Schedule */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Return Schedule</CardTitle>
-          <CardDescription>
-            Periodic transfers back to Asset Hub
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <h4 className="text-sm font-semibold text-neutral-700">Frequency</h4>
-                <p className="text-sm text-neutral-600">
-                  Every {inputs.returnFrequencyDays} day(s)
-                </p>
-              </div>
-
-              <div>
-                <h4 className="text-sm font-semibold text-neutral-700">Number of Returns</h4>
-                <p className="text-sm text-neutral-600">{inputs.numberOfReturns}</p>
-              </div>
+              </p>
             </div>
 
-            <div>
-              <h4 className="text-sm font-semibold text-neutral-700">Amount per Return</h4>
-              <div className="space-y-1">
-                {calculations.estimatedUsdtPerReturn > 0n && (
-                  <p className="text-sm text-neutral-600">
-                    USDT: ${(Number(calculations.estimatedUsdtPerReturn) / 1e6).toLocaleString()}
-                  </p>
-                )}
-                {calculations.estimatedUsdcPerReturn > 0n && (
-                  <p className="text-sm text-neutral-600">
-                    USDC: ${(Number(calculations.estimatedUsdcPerReturn) / 1e6).toLocaleString()}
-                  </p>
-                )}
-              </div>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Split Configuration */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Treasury Split</CardTitle>
-          <CardDescription>
-            Automatic split on each return
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-3">
-            <div className="flex justify-between items-center p-3 border-l-4 border-primary-500 bg-primary-50 rounded-r-lg">
-              <span className="text-sm font-medium text-neutral-700">Fellowship Treasury</span>
-              <span className="text-sm font-semibold text-primary-600">{inputs.treasurySplitPercent}%</span>
-            </div>
-
-            <div className="flex justify-between items-center p-3 border-l-4 border-success-500 bg-success-50 rounded-r-lg">
-              <span className="text-sm font-medium text-neutral-700">Fellowship Salary</span>
-              <span className="text-sm font-semibold text-success-600">{inputs.salarySplitPercent}%</span>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Transaction Flow */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Transaction Flow</CardTitle>
-          <CardDescription>
-            How the proposal will execute
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-3">
-            <div className="flex items-start space-x-3">
-              <div className="flex-shrink-0 w-6 h-6 rounded-full bg-primary-100 flex items-center justify-center">
-                <span className="text-xs font-semibold text-primary-600">1</span>
-              </div>
-              <div className="flex-1">
-                <h5 className="text-sm font-medium text-neutral-700">Treasury Spend</h5>
-                <p className="text-sm text-neutral-600">
-                  Send {(Number(inputs.dotAmount) / 1e10).toLocaleString()} DOT from Asset Hub
-                  treasury to Hydration
-                </p>
-              </div>
-            </div>
-
-            <div className="flex items-start space-x-3">
-              <div className="flex-shrink-0 w-6 h-6 rounded-full bg-primary-100 flex items-center justify-center">
-                <span className="text-xs font-semibold text-primary-600">2</span>
-              </div>
-              <div className="flex-1">
-                <h5 className="text-sm font-medium text-neutral-700">DCA Setup</h5>
-                <p className="text-sm text-neutral-600">
-                  After 100 blocks (~10 min), schedule DCA on Hydration to convert DOT to{' '}
-                  {inputs.stablecoin}
-                </p>
-              </div>
-            </div>
-
-            <div className="flex items-start space-x-3">
-              <div className="flex-shrink-0 w-6 h-6 rounded-full bg-primary-100 flex items-center justify-center">
-                <span className="text-xs font-semibold text-primary-600">3</span>
-              </div>
-              <div className="flex-1">
-                <h5 className="text-sm font-medium text-neutral-700">Periodic Returns</h5>
-                <p className="text-sm text-neutral-600">
-                  Every {inputs.returnFrequencyDays} day(s), transfer stablecoins back to Asset
-                  Hub with automatic {inputs.treasurySplitPercent}/{inputs.salarySplitPercent} split
-                </p>
-              </div>
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Transaction Breakdown */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Transaction Breakdown</CardTitle>
-          <CardDescription>
-            {transactionBreakdown.totalCalls} call{transactionBreakdown.totalCalls > 1 ? 's' : ''} in Utility.batch_all
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="space-y-3">
-            {transactionBreakdown.calls.map((call, idx) => (
-              <div
-                key={idx}
-                className="flex items-start space-x-3 p-3 bg-neutral-50 rounded-lg border border-neutral-200"
-              >
-                <div className="flex-shrink-0">
-                  <Code2 className="w-5 h-5 text-primary-600" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center space-x-2">
-                    <h5 className="text-sm font-semibold text-neutral-800">{call.name}</h5>
-                    <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-primary-100 text-primary-700">
-                      {call.pallet}.{call.call}
+            {/* DCA Strategy & Returns in 2 columns */}
+            <div className="grid grid-cols-2 gap-6">
+              {/* DCA Strategy */}
+              <div className="space-y-3">
+                <h4 className="text-sm font-semibold text-neutral-700">DCA Strategy</h4>
+                <div className="space-y-2 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-neutral-500">Total Trades</span>
+                    <span className="text-neutral-800 font-medium">
+                      {calculations?.totalTrades?.toLocaleString() ?? '—'}
                     </span>
                   </div>
-                  <p className="text-sm text-neutral-600 mt-1">{call.description}</p>
+                  <div className="flex justify-between">
+                    <span className="text-neutral-500">DOT per trade</span>
+                    <span className="text-neutral-800 font-medium">
+                      ~{(Number(calculations?.dotPerTrade ?? 0n) / 1e10).toFixed(2)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-neutral-500">Duration</span>
+                    <span className="text-neutral-800 font-medium">
+                      {inputs?.dcaDurationDays ?? 0} days
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-neutral-500">Slippage</span>
+                    <span className="text-neutral-800 font-medium">
+                      {inputs?.slippagePercent ?? 0}%
+                    </span>
+                  </div>
                 </div>
               </div>
-            ))}
+
+              {/* Returns */}
+              <div className="space-y-3">
+                <h4 className="text-sm font-semibold text-neutral-700">Returns</h4>
+                <div className="space-y-2 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-neutral-500">Frequency</span>
+                    <span className="text-neutral-800 font-medium">
+                      Every {inputs?.returnFrequencyDays ?? 0} day(s)
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-neutral-500">Total returns</span>
+                    <span className="text-neutral-800 font-medium">
+                      {inputs?.numberOfReturns ?? 0}
+                    </span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-neutral-500">Est. per return</span>
+                    <span className="text-neutral-800 font-medium">
+                      ~${(estimatedPerReturn ?? 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Split Configuration & Fees */}
+            <div className="pt-4 border-t border-neutral-200 space-y-2">
+              <p className="text-sm">
+                <span className="text-neutral-500">Split:</span>{' '}
+                <span className="font-medium text-neutral-800">
+                  {inputs?.treasurySplitPercent ?? 0}% Treasury / {inputs?.salarySplitPercent ?? 0}% Salary
+                </span>
+              </p>
+              <div className="flex justify-between text-sm">
+                <span className="text-neutral-500">Est. fees (Asset Hub)</span>
+                <span className="text-neutral-800 font-medium">
+                  ~{(Number(calculations?.feeEstimate ?? 0n) / 1e10).toFixed(3)} DOT
+                </span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-neutral-500">XCM fee stash (Hydration)</span>
+                <span className="text-neutral-800 font-medium">
+                  ~{(Number(calculations?.feeStash ?? 0n) / 1e10).toFixed(3)} DOT
+                </span>
+              </div>
+            </div>
           </div>
         </CardContent>
       </Card>
 
       {/* Encoded Call Data */}
       <Card>
-        <CardHeader>
+        <CardHeader className="pb-2">
           <CardTitle>Encoded Transaction</CardTitle>
-          <CardDescription>
-            Call data for submission to governance
-          </CardDescription>
         </CardHeader>
         <CardContent>
           {isEncoding ? (
@@ -437,7 +274,7 @@ export function ProposalPreview({ proposal, onBack, onNext }: ProposalPreviewPro
         <AlertTitle>Next Steps</AlertTitle>
         <AlertDescription>
           After submission, this proposal will be created as a referendum. It will need to go
-          through the governance voting process before execution. This typically takes 2-4 weeks.
+          through the governance voting process before execution.
         </AlertDescription>
       </Alert>
 

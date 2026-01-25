@@ -3,8 +3,6 @@
  * Builds the DCA.schedule call that will be executed on Hydration
  */
 
-import { blake2b } from '@noble/hashes/blake2.js';
-import { base58 } from '@scure/base';
 import type { NetworkType, StablecoinType } from '../api/constants';
 import {
   getHydrationAssetId,
@@ -19,7 +17,8 @@ import {
 export interface DcaOrder {
   asset_in: number; // Asset ID to sell (DOT)
   asset_out: number; // Asset ID to buy (USDT or USDC)
-  amount_in: bigint; // Amount per trade (0 = use all available)
+  amount_in: bigint; // Amount per trade
+  min_amount_out: bigint; // Minimum expected output (after slippage)
 }
 
 /**
@@ -44,26 +43,32 @@ export function calculateDcaParams(
   sovereignAccount: string,
   stablecoin: 'USDT' | 'USDC',
   dcaFrequencyBlocks: number,
-  slippagePercent: number
+  slippagePercent: number,
+  dotPerTrade: bigint,
+  expectedOutputPerTrade: bigint
 ): DcaScheduleParams {
   const dotAssetId = getHydrationAssetId(network, 'DOT');
   const stablecoinAssetId = getHydrationAssetId(network, stablecoin);
 
-  // Convert percentage to basis points (1% = 100 bp)
-  const slippageBasisPoints = Math.floor(slippagePercent * 100);
-  const stabilityBasisPoints = DCA_CONFIG.STABILITY_THRESHOLD_PERCENT * 100;
+  // Convert percentage to per million (1% = 10,000 per million)
+  const slippagePerMillion = Math.floor(slippagePercent * 10_000);
+  const stabilityPerMillion = DCA_CONFIG.STABILITY_THRESHOLD_PERCENT * 10_000;
+
+  // Calculate min_amount_out with slippage protection
+  const minAmountOut = (expectedOutputPerTrade * BigInt(100 - Math.floor(slippagePercent))) / 100n;
 
   return {
     owner: sovereignAccount,
     period: dcaFrequencyBlocks,
     total_amount: 0n, // 0 means use all available balance
     max_retries: DCA_CONFIG.MAX_RETRIES,
-    stability_threshold: stabilityBasisPoints,
-    slippage: slippageBasisPoints,
+    stability_threshold: stabilityPerMillion,
+    slippage: slippagePerMillion,
     order: {
       asset_in: dotAssetId,
       asset_out: stablecoinAssetId,
-      amount_in: 0n, // 0 means divide total by number of periods
+      amount_in: dotPerTrade,
+      min_amount_out: minAmountOut,
     },
   };
 }
@@ -95,7 +100,7 @@ export async function encodeDcaScheduleCall(
         asset_in: params.order.asset_in,
         asset_out: params.order.asset_out,
         amount_in: params.order.amount_in,
-        min_amount_out: 0n, // No minimum for DCA
+        min_amount_out: params.order.min_amount_out,
         route: [],
       }),
     },
@@ -152,9 +157,15 @@ export function buildDcaScheduleCalls(
   sovereignAccount: string,
   stablecoin: StablecoinType,
   dcaFrequencyBlocks: number,
-  slippagePercent: number
+  slippagePercent: number,
+  dotPerTrade: bigint,
+  expectedOutputPerTrade: bigint
 ): Array<{ stablecoin: 'USDT' | 'USDC'; params: DcaScheduleParams }> {
   const calls: Array<{ stablecoin: 'USDT' | 'USDC'; params: DcaScheduleParams }> = [];
+
+  // When BOTH stablecoins are selected, split the amounts
+  const dotPerTradePerCoin = stablecoin === 'BOTH' ? dotPerTrade / 2n : dotPerTrade;
+  const expectedOutputPerCoin = stablecoin === 'BOTH' ? expectedOutputPerTrade / 2n : expectedOutputPerTrade;
 
   if (stablecoin === 'USDT' || stablecoin === 'BOTH') {
     calls.push({
@@ -164,7 +175,9 @@ export function buildDcaScheduleCalls(
         sovereignAccount,
         'USDT',
         dcaFrequencyBlocks,
-        slippagePercent
+        slippagePercent,
+        dotPerTradePerCoin,
+        expectedOutputPerCoin
       ),
     });
   }
@@ -177,7 +190,9 @@ export function buildDcaScheduleCalls(
         sovereignAccount,
         'USDC',
         dcaFrequencyBlocks,
-        slippagePercent
+        slippagePercent,
+        dotPerTradePerCoin,
+        expectedOutputPerCoin
       ),
     });
   }
@@ -186,46 +201,31 @@ export function buildDcaScheduleCalls(
 }
 
 /**
- * Calculate sovereign account address for a parachain
- * This is a deterministic calculation that doesn't require a chain connection
- * Formula: SS58Encode(blake2_256("para" + little_endian_encode(parachain_id)))
+ * Get sovereign account address for a parachain on Hydration
+ * Uses Hydration's LocationToAccountApi runtime API for accurate conversion
  */
-export function calculateSovereignAccount(parachainId: number): string {
-  // Encode parachain ID as 4-byte little-endian
-  const parachainIdBytes = new Uint8Array(4);
-  new DataView(parachainIdBytes.buffer).setUint32(0, parachainId, true);
+export async function getSovereignAccount(
+  network: NetworkType,
+  parachainId: number
+): Promise<string> {
+  const { getHydrationApi } = await import('../api/clients/hydration');
+  const { HydrationXcmVersionedLocation, XcmV3Junctions, XcmV3Junction } = await import('@polkadot-api/descriptors');
 
-  // Create the "para" prefix
-  const prefix = new TextEncoder().encode('para');
+  const hydrationApi = await getHydrationApi(network);
 
-  // Concatenate and hash
-  const input = new Uint8Array(prefix.length + parachainIdBytes.length);
-  input.set(prefix);
-  input.set(parachainIdBytes, prefix.length);
+  // Build the versioned XCM location for the parachain (from Hydration's perspective)
+  // V4 locations use the same structure as V3
+  const location = HydrationXcmVersionedLocation.V4({
+    parents: 1,
+    interior: XcmV3Junctions.X1(XcmV3Junction.Parachain(parachainId)),
+  });
 
-  // Blake2b hash (32 bytes)
-  const hash = blake2b(input, { dkLen: 32 });
+  // Use Hydration's runtime API to convert location to account
+  const result = await hydrationApi.apis.LocationToAccountApi.convert_location(location);
 
-  // Convert to SS58 address using base58 encoding with Polkadot prefix
-  // SS58 prefix 0 is used for Polkadot. Both Polkadot and Hydration accept
-  // prefix 0 addresses, and the sovereign account derivation produces the
-  // same 32-byte public key regardless of prefix.
-  const SS58_PREFIX_POLKADOT = 0;
-  const prefixByte = new Uint8Array([SS58_PREFIX_POLKADOT]);
-  const SS58_PREFIX = new TextEncoder().encode('SS58PRE');
+  if (result.success === false || result.value === undefined) {
+    throw new Error(`Failed to convert location to account for parachain ${parachainId}`);
+  }
 
-  // Compute checksum
-  const checksumInput = new Uint8Array(SS58_PREFIX.length + prefixByte.length + hash.length);
-  checksumInput.set(SS58_PREFIX);
-  checksumInput.set(prefixByte, SS58_PREFIX.length);
-  checksumInput.set(hash, SS58_PREFIX.length + prefixByte.length);
-  const checksum = blake2b(checksumInput, { dkLen: 64 }).slice(0, 2);
-
-  // Combine prefix + hash + checksum
-  const ss58Bytes = new Uint8Array(prefixByte.length + hash.length + checksum.length);
-  ss58Bytes.set(prefixByte);
-  ss58Bytes.set(hash, prefixByte.length);
-  ss58Bytes.set(checksum, prefixByte.length + hash.length);
-
-  return base58.encode(ss58Bytes);
+  return result.value;
 }
