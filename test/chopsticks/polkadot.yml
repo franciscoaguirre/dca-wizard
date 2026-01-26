@@ -1,0 +1,21 @@
+# Chopsticks configuration for Polkadot Relay Chain
+# Start with: npx @acala-network/chopsticks@latest --config test/chopsticks/polkadot.yml
+
+endpoint:
+  - wss://rpc.ibp.network/polkadot
+  - wss://polkadot-rpc.n.dwellir.com
+  - wss://rpc.polkadot.io
+mock-signature-host: true
+db: ./test/chopsticks/db/polkadot.db
+port: 8002
+
+import-storage:
+  System:
+    Account:
+      # Fund Alice (dev account)
+      - - - 5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY
+        - providers: 1
+          data:
+            free: '100000000000000000' # 10,000,000 DOT
+  ParasDisputes:
+    $removePrefix: ['disputes'] # removes disputes data - makes block building much faster

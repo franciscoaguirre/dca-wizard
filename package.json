@@ -7,7 +7,12 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:dca": "npx tsx test/run-test.ts",
+    "test:dca:call": "npx tsx test/run-test.ts --call",
+    "chopsticks:ah": "npx @acala-network/chopsticks@latest --config test/chopsticks/asset-hub.yml",
+    "chopsticks:hydration": "npx @acala-network/chopsticks@latest --config test/chopsticks/hydration.yml",
+    "chopsticks:relay": "npx @acala-network/chopsticks@latest --config test/chopsticks/polkadot.yml"
   },
   "dependencies": {
     "@noble/hashes": "^2.0.1",
@@ -24,7 +29,12 @@
     "tailwind-merge": "^3.4.0"
   },
   "devDependencies": {
+    "@acala-network/chopsticks-testing": "^1.2.2",
     "@eslint/js": "^9.39.1",
+    "@polkadot-api/signer": "^0.2.0",
+    "@polkadot-labs/hdkd": "^0.0.24",
+    "@polkadot-labs/hdkd-helpers": "^0.0.25",
+    "tsx": "^4.19.0",
     "@tailwindcss/postcss": "^4.1.18",
     "@types/node": "^24.10.1",
     "@types/react": "^19.2.5",

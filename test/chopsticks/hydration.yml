@@ -1,0 +1,36 @@
+# Chopsticks configuration for Hydration
+# Start with: npx @acala-network/chopsticks@latest --config test/chopsticks/hydration.yml
+
+endpoint:
+  - wss://hydradx-rpc.dwellir.com
+  - wss://rpc.hydradx.cloud
+mock-signature-host: true
+db: ./test/chopsticks/db/hydration.db
+port: 8001
+
+import-storage:
+  System:
+    Account:
+      # Fund Alice (dev account) with HDX for fees
+      - - - 5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY
+        - providers: 1
+          data:
+            free: '10000000000000000000000' # 10,000 HDX
+  Tokens:
+    Accounts:
+      # Alice - HDX (asset 0)
+      - - - 5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY
+          - 0
+        - free: '10000000000000000000000' # 10,000 HDX
+      # Alice - DOT (asset 5)
+      - - - 5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY
+          - 5
+        - free: '100000000000000' # 10,000 DOT
+      # Alice - USDT (asset 10)
+      - - - 5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY
+          - 10
+        - free: '100000000000' # 100,000 USDT
+      # Alice - USDC (asset 22)
+      - - - 5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY
+          - 22
+        - free: '100000000000' # 100,000 USDC

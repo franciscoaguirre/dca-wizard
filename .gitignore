@@ -22,3 +22,8 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Chopsticks database files
+test/chopsticks/db/*.db
+test/chopsticks/db/*.db-shm
+test/chopsticks/db/*.db-wal
