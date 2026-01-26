@@ -30,6 +30,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Generate polkadot-api descriptors
+        run: npx papi
+
       - name: Build
         run: npm run build
 
