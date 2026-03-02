@@ -2,10 +2,15 @@
 # Start with: npx @acala-network/chopsticks@latest --config test/chopsticks/hydration.yml
 
 endpoint:
-  - wss://hydradx-rpc.dwellir.com
-  - wss://rpc.hydradx.cloud
+- wss://hydration.rpc.stkd.io
+- wss://rpc.hydradx.cloud
+- wss://hydration-rpc.n.dwellir.com
+- wss://hydration.ibp.network
+- wss://rpc.helikon.io/hydradx
+- wss://hydration.dotters.network
 mock-signature-host: true
 db: ./test/chopsticks/db/hydration.db
+wasm-override: ../../hydration-node/hydation.wasm
 port: 8001
 
 import-storage:

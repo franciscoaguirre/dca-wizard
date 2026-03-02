@@ -32,8 +32,12 @@ export function ConnectionStatusIndicator() {
     }
   };
 
-  const getChainLabel = (chain: 'assetHub' | 'hydration'): string => {
-    return chain === 'assetHub' ? 'Asset Hub' : 'Hydration';
+  const getChainLabel = (chain: 'assetHub' | 'hydration' | 'collectives'): string => {
+    switch (chain) {
+      case 'assetHub': return 'Asset Hub';
+      case 'hydration': return 'Hydration';
+      case 'collectives': return 'Collectives';
+    }
   };
 
   return (
@@ -95,6 +99,27 @@ export function ConnectionStatusIndicator() {
           {status.hydration.error && (
             <div className="text-xs text-red-600 ml-4 mt-1 break-words">
               {status.hydration.error}
+            </div>
+          )}
+
+          {/* Collectives Status */}
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div
+                className={`w-2 h-2 rounded-full ${getStatusColor(status.collectives.state)}`}
+              />
+              <span className="text-xs font-medium text-neutral-700">
+                {getChainLabel(status.collectives.chain)}
+              </span>
+            </div>
+            <span className="text-xs text-neutral-600">
+              {getStatusText(status.collectives.state)}
+            </span>
+          </div>
+
+          {status.collectives.error && (
+            <div className="text-xs text-red-600 ml-4 mt-1 break-words">
+              {status.collectives.error}
             </div>
           )}
         </div>

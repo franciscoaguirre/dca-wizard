@@ -8,10 +8,13 @@ export type NetworkType = 'polkadot' | 'paseo';
 
 // Account Addresses
 export const ACCOUNTS = {
-  TREASURY: '13UVJyLnbVp9RBZYFwFGyDvVd1y27Tt8tkntv6Q7JVPhFsTB',
   FELLOWSHIP_TREASURY: '16VcQSRcMFy6ZHVjBvosKmo7FKqTb8ZATChDYo8ibutzLnos',
   FELLOWSHIP_SALARY: '13w7NdvSR1Af8xsQTArDtZmVvjE8XhWNdL4yed3iFHrUNCnS',
 } as const;
+
+// Fellowship pallet indices on Collectives chain
+export const FELLOWSHIP_TREASURY_PALLET_INDEX = 65;
+export const FELLOWSHIP_SALARY_PALLET_INDEX = 64;
 
 // Parachain IDs
 export const PARACHAIN_IDS = {
@@ -74,11 +77,10 @@ export const DEFAULTS = {
   DCA_FREQUENCY_BLOCKS: 100, // ~10 minutes
   DCA_DURATION_DAYS: 30,
   SLIPPAGE_PERCENT: 1,
-  RETURN_FREQUENCY_DAYS: 1,
-  NUMBER_OF_RETURNS: 30,
   TREASURY_SPLIT_PERCENT: 70,
-  SALARY_SPLIT_PERCENT: 30,
   FEE_BUFFER_PERCENT: 10, // Extra DOT reserved for multi-hop fees
+  RETURN_FREQUENCY_DAYS: 7,
+  NUMBER_OF_RETURNS: 4, // default: 4 returns over 30 days
 } as const;
 
 // DCA Parameters
@@ -94,7 +96,7 @@ export const VALIDATION = {
   MIN_DOT_AMOUNT: BigInt(100) * BigInt(10 ** DECIMALS.DOT), // 100 DOT minimum
   MIN_DCA_FREQUENCY_BLOCKS: 10,
   MIN_RETURNS: 1,
-  MAX_RETURNS: 365, // One year of daily returns
+  MAX_RETURNS: 52,
 } as const;
 
 // Chain Endpoints (WebSocket)
@@ -103,11 +105,13 @@ export const CHAIN_ENDPOINTS = {
     RELAY: 'wss://polkadot-rpc.dwellir.com',
     ASSET_HUB: 'wss://polkadot-asset-hub-rpc.polkadot.io',
     HYDRATION: 'wss://rpc.hydradx.cloud',
+    COLLECTIVES: 'wss://polkadot-collectives-rpc.polkadot.io',
   },
   paseo: {
     RELAY: 'wss://paseo.rpc.amforc.com',
     ASSET_HUB: 'wss://paseo-asset-hub-rpc.polkadot.io',
     HYDRATION: 'wss://paseo.rpc.hydration.cloud', // TODO: Verify actual endpoint
+    COLLECTIVES: 'wss://paseo-collectives-rpc.polkadot.io', // TODO: Verify actual endpoint
   },
 } as const;
 
@@ -138,7 +142,7 @@ export function getParachainId(
 
 export function getChainEndpoint(
   network: NetworkType,
-  chain: 'RELAY' | 'ASSET_HUB' | 'HYDRATION'
+  chain: 'RELAY' | 'ASSET_HUB' | 'HYDRATION' | 'COLLECTIVES'
 ): string {
   return CHAIN_ENDPOINTS[network][chain];
 }

@@ -1,32 +1,31 @@
 #!/usr/bin/env npx tsx
 /**
  * DCA Wizard Test Runner
- * Executes hex-encoded calls against forked Polkadot mainnet using Chopsticks
+ * Executes the single batched proposal against forked Polkadot mainnet using Chopsticks
  *
  * Usage:
- *   npx tsx test/run-test.ts                    # Run with sample call
- *   npx tsx test/run-test.ts --call "0x..."     # Run with specific call
+ *   npx tsx test/run-test.ts                    # Run connectivity test
+ *   npx tsx test/run-test.ts --call "0x..."     # Run with specific batch call
  *
  * Prerequisites:
  *   Start Chopsticks instances in separate terminals:
  *   - chopsticks --config asset-hub.yml --port 8000
  *   - chopsticks --config hydration.yml --port 8001
  *   - chopsticks --config polkadot.yml --port 8002
+ *   - chopsticks --config collectives.yml --port 8003
  */
 
-import { Binary, FixedSizeBinary } from "polkadot-api";
 import {
   setupChopsticksNetwork,
   getCurrentBlocks,
   advanceAllBlocks,
+  advanceCollectivesBlocks,
   fundAliceAccount,
   fundTreasuryAccount,
+  type ChopsticksClients,
 } from "./setup";
 import {
-  storePreimage,
-  getPreimage,
-  executeGovernanceCall,
-  computeCallHash,
+  executeCollectivesBatchCall,
 } from "./governance";
 import {
   waitForDcaScheduleId,
@@ -34,6 +33,7 @@ import {
   printHydrationBalances,
   printTestSummary,
   monitorSchedulerEvents,
+  monitorCollectivesSchedulerEvents,
 } from "./monitor";
 import { ACCOUNTS, TREASURY_FUND_AMOUNT } from "./constants";
 
@@ -64,7 +64,7 @@ Usage:
   npx tsx test/run-test.ts [options]
 
 Options:
-  --call <hex>    Hex-encoded call to execute (with or without 0x prefix)
+  --call <hex>    Hex-encoded batch call to execute (with or without 0x prefix)
   --help, -h      Show this help message
 
 Prerequisites:
@@ -73,9 +73,10 @@ Prerequisites:
   Terminal 1: npx @acala-network/chopsticks@latest --config test/chopsticks/asset-hub.yml
   Terminal 2: npx @acala-network/chopsticks@latest --config test/chopsticks/hydration.yml
   Terminal 3: npx @acala-network/chopsticks@latest --config test/chopsticks/polkadot.yml
+  Terminal 4: npx @acala-network/chopsticks@latest --config test/chopsticks/collectives.yml
 
 Examples:
-  # Run with a specific call from the DCA wizard
+  # Run with a batch call from the DCA wizard
   npx tsx test/run-test.ts --call "0x1f0801..."
 
   # Run without a call (just test connectivity)
@@ -93,9 +94,10 @@ async function main() {
 
   console.log("=".repeat(60));
   console.log("   DCA Wizard Chopsticks Test");
+  console.log("   Single Batched Proposal on Collectives");
   console.log("=".repeat(60));
 
-  let clients;
+  let clients: ChopsticksClients | undefined;
   try {
     // Step 1: Setup chopsticks network connections
     console.log("\n[Step 1] Connecting to Chopsticks networks...\n");
@@ -110,81 +112,66 @@ async function main() {
     // If no call provided, just test connectivity and exit
     if (!callHex) {
       console.log("\n[Info] No call provided. Testing connectivity only.\n");
-      console.log("To test a DCA wizard call, use:");
+      console.log("To test a DCA wizard batch call, use:");
       console.log('  npx tsx test/run-test.ts --call "0x..."');
       console.log("\nConnectivity test successful!");
       await clients.cleanup();
       process.exit(0);
     }
 
-    // Step 3: Process the call
-    console.log("\n[Step 3] Processing call...\n");
+    // Step 3: Process the batch call
+    console.log("\n[Step 3] Processing batch call...\n");
     const normalizedCallHex = callHex.startsWith("0x")
       ? callHex
       : `0x${callHex}`;
-    const callData = Binary.fromHex(normalizedCallHex);
-    const callSize = callData.asBytes().length;
-    const { hash, hashHex } = computeCallHash(callData);
 
     console.log(`Call hex: ${normalizedCallHex.slice(0, 66)}...`);
-    console.log(`Call size: ${callSize} bytes`);
-    console.log(`Call hash: ${hashHex}`);
 
-    // Step 4: Check if preimage exists, otherwise store it
-    console.log("\n[Step 4] Handling preimage...\n");
-    const existingPreimage = await getPreimage(
+    // Step 4: Inject batch call into Collectives scheduler with Architects origin
+    console.log("\n[Step 4] Injecting batch call into Collectives scheduler...\n");
+    await executeCollectivesBatchCall(
       clients,
-      FixedSizeBinary.fromBytes(hash),
-      callSize
+      normalizedCallHex
     );
 
-    if (!existingPreimage) {
-      console.log("Preimage not found, storing...");
-      await storePreimage(clients, callData);
-    } else {
-      console.log("Preimage already exists");
-    }
+    // Step 5: Advance Collectives blocks to trigger batch execution
+    console.log("\n[Step 5] Advancing Collectives blocks to trigger batch...\n");
+    const collectivesEvents = await monitorCollectivesSchedulerEvents(clients, 2);
+    console.log(`Found ${collectivesEvents.length} Scheduler.Dispatched events on Collectives`);
 
-    // Step 5: Execute the governance call via scheduler
-    console.log("\n[Step 5] Executing governance call...\n");
-    await executeGovernanceCall(
-      clients,
-      hashHex,
-      callSize
-    );
-
-    // Step 6: Advance blocks and monitor execution
-    console.log("\n[Step 6] Advancing blocks and monitoring...\n");
-
-    // Advance blocks to trigger execution
-    await advanceAllBlocks(clients, 1);
-
-    // Monitor scheduler events on Asset Hub
-    console.log("\nMonitoring Scheduler events...");
-    const schedulerEvents = await monitorSchedulerEvents(clients, 5);
-    console.log(`Found ${schedulerEvents.length} scheduler events`);
-
-    // Wait for the scheduled XCM to be sent (warm-up period)
-    console.log("\nWaiting for warm-up period...");
+    // Step 6: Advance all chain blocks to propagate XCM messages
+    console.log("\n[Step 6] Advancing all chains to propagate XCMs...\n");
     await advanceAllBlocks(clients, 5);
 
-    // Step 7: Check balances on Hydration
-    console.log("\n[Step 7] Checking Hydration balances...\n");
+    // Monitor scheduler events on Asset Hub (for XCM arrival)
+    console.log("\nMonitoring Asset Hub events...");
+    const schedulerEvents = await monitorSchedulerEvents(clients, 5);
+    console.log(`Found ${schedulerEvents.length} scheduler events on Asset Hub`);
 
-    // Get the treasury sovereign account on Hydration
-    // This is derived from the treasury account's location
-    const treasurySovAccount = ACCOUNTS.TREASURY;
-    await printHydrationBalances(clients, treasurySovAccount, "Treasury Sovereign");
+    // Step 7: Wait for warm-up period and trigger DCA start
+    console.log("\n[Step 7] Waiting for warm-up period...\n");
+    // The DCA start is scheduled after WARM_UP_BLOCKS on Collectives
+    // Advance Collectives blocks to trigger the scheduled DCA send
+    await advanceCollectivesBlocks(clients, 100);
+    // Then advance all chains to propagate the DCA XCM to Hydration
+    await advanceAllBlocks(clients, 5);
 
-    // Step 8: Monitor for DCA events (if applicable)
-    console.log("\n[Step 8] Monitoring for DCA events...\n");
+    // Step 8: Check Hydration balances
+    console.log("\n[Step 8] Checking Hydration balances...\n");
 
-    // Try to find DCA ExecutionPlanned events
+    // The Plurality sovereign account on Hydration receives the DOT
+    // We can check using the treasury sovereign address
+    const treasurySovAccount = ACCOUNTS.FELLOWSHIP_TREASURY;
+    await printHydrationBalances(clients, treasurySovAccount, "Fellowship Treasury Sovereign");
+
+    // Step 9: Monitor for DCA events
+    console.log("\n[Step 9] Monitoring for DCA events...\n");
+
     try {
       const dcaId = await waitForDcaScheduleId(
         clients,
         treasurySovAccount,
-        20 // Max blocks to wait
+        20
       );
 
       console.log(`\nDCA Schedule created with ID: ${dcaId}`);
@@ -194,13 +181,19 @@ async function main() {
       const dcaResult = await monitorDcaExecution(clients, [dcaId], 50);
       printTestSummary(dcaResult);
     } catch (error) {
-      console.log("No DCA events detected (this is expected for some call types)");
+      console.log("No DCA events detected (this may be expected if warmup hasn't completed)");
       console.log(`Error: ${error}`);
     }
 
+    // Step 10: Advance blocks to trigger periodic return
+    console.log("\n[Step 10] Advancing blocks for periodic return...\n");
+    // Advance Collectives blocks for the periodic return scheduler
+    await advanceCollectivesBlocks(clients, 200);
+    await advanceAllBlocks(clients, 10);
+
     // Final balance check
     console.log("\n[Final] Balance Summary\n");
-    await printHydrationBalances(clients, treasurySovAccount, "Treasury Sovereign");
+    await printHydrationBalances(clients, treasurySovAccount, "Fellowship Treasury Sovereign");
     await getCurrentBlocks(clients);
 
     console.log("\n" + "=".repeat(60));

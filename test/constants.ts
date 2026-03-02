@@ -7,6 +7,7 @@ export const PORTS = {
   ASSET_HUB: 8000,
   HYDRATION: 8001,
   RELAY: 8002,
+  COLLECTIVES: 8003,
 } as const;
 
 // Dev accounts

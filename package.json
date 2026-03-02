@@ -10,9 +10,7 @@
     "preview": "vite preview",
     "test:dca": "npx tsx test/run-test.ts",
     "test:dca:call": "npx tsx test/run-test.ts --call",
-    "chopsticks:ah": "npx @acala-network/chopsticks@latest --config test/chopsticks/asset-hub.yml",
-    "chopsticks:hydration": "npx @acala-network/chopsticks@latest --config test/chopsticks/hydration.yml",
-    "chopsticks:relay": "npx @acala-network/chopsticks@latest --config test/chopsticks/polkadot.yml"
+    "chopsticks": "npx @acala-network/chopsticks@latest xcm -r test/chopsticks/polkadot.yml -p test/chopsticks/asset-hub.yml -p test/chopsticks/hydration.yml -p test/chopsticks/collectives.yml"
   },
   "dependencies": {
     "@noble/hashes": "^2.0.1",

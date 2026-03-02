@@ -7,6 +7,7 @@ endpoint:
 mock-signature-host: true
 db: ./test/chopsticks/db/asset-hub.db
 port: 8000
+wasm-override: ../../fellowship/runtimes/asset_hub_polkadot_runtime.compact.compressed.wasm
 
 import-storage:
   System:

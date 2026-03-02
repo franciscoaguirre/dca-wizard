@@ -12,6 +12,7 @@ import { SubmitProposal } from './SubmitProposal';
 import { ConnectionStatusIndicator } from '../components/ConnectionStatus/ConnectionStatusIndicator';
 import { getAssetHubClient } from '../api/clients/dotAh';
 import { getHydrationClient } from '../api/clients/hydration';
+import { getCollectivesClient } from '../api/clients/collectives';
 
 export function DcaWizard() {
   const { state, dispatch, canProceedToPreview } = useWizardState();
@@ -20,6 +21,7 @@ export function DcaWizard() {
   useEffect(() => {
     getAssetHubClient('polkadot').catch(console.error);
     getHydrationClient('polkadot').catch(console.error);
+    getCollectivesClient('polkadot').catch(console.error);
   }, []);
 
   const handleNext = () => {
@@ -48,7 +50,7 @@ export function DcaWizard() {
               DCA Wizard
             </h1>
             <p className="text-base text-neutral-600 mt-2">
-              Create a governance proposal for Dollar Cost Averaging treasury operations
+              Create a Fellowship Treasury DCA proposal via the Architects track
             </p>
           </div>
           <ConnectionStatusIndicator />
@@ -101,6 +103,7 @@ export function DcaWizard() {
           {state.currentStep === 'preview' && state.proposal && (
             <ProposalPreview
               proposal={state.proposal}
+              dotPriceUsd={state.dotPriceUsd}
               onBack={handleBack}
               onNext={handleNext}
             />

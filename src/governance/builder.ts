@@ -1,17 +1,18 @@
 /**
  * Main Governance Proposal Builder
- * Combines treasury spend, DCA setup, and periodic returns into a complete proposal
+ * Builds a single batched proposal on Collectives (Architects track) containing:
+ * 1. Transfer DOT from Fellowship Treasury to Hydration (immediate)
+ * 2. Start DCA on Hydration (scheduled after warmup)
+ * 3. Periodic return of stablecoins (scheduled, repeating)
  */
 
 import type { NetworkType, StablecoinType } from '../api/constants';
 import {
   getParachainId,
-  ACCOUNTS,
   DEFAULTS,
   TIMING,
   daysToBlocks,
 } from '../api/constants';
-import type { XcmVersionedXcm } from './xcm-messages';
 import {
   buildTreasuryToHydrationXcm,
   buildDcaScheduleXcm,
@@ -26,9 +27,7 @@ import {
 } from './dca-setup';
 import {
   calculatePeriodicReturnParams,
-  estimateTotalStablesAccumulated,
   buildPeriodicReturnSchedulerCall,
-  validatePeriodicReturnParams,
   estimatePeriodicReturnFee,
 } from './periodic-return';
 
@@ -49,18 +48,6 @@ export interface DcaWizardInputs {
 }
 
 /**
- * Scheduler call input parameters
- */
-export interface SchedulerCallInput {
-  after: number;
-  maybe_periodic: {
-    period: number;
-    repetitions: number;
-  } | null;
-  priority: number;
-}
-
-/**
  * Calculated values and estimates
  */
 export interface DcaCalculations {
@@ -71,9 +58,9 @@ export interface DcaCalculations {
   estimatedUsdtPerReturn: bigint;
   estimatedUsdcPerReturn: bigint;
   totalDurationBlocks: number;
-  sovereignAccount: string; // SS58 address
+  sovereignAccount: string;
   feeEstimate: bigint;
-  feeStash: bigint; // DOT fee stash for XCM execution on Hydration
+  feeStash: bigint;
 }
 
 /**
@@ -82,19 +69,6 @@ export interface DcaCalculations {
 export interface DcaProposal {
   inputs: DcaWizardInputs;
   calculations: DcaCalculations;
-  calls: {
-    treasurySpend: XcmVersionedXcm;
-    dcaSchedule: Array<{
-      stablecoin: 'USDT' | 'USDC';
-      schedulerCall: SchedulerCallInput;
-      xcmCall: XcmVersionedXcm;
-    }>;
-    periodicReturn: {
-      schedulerCall: SchedulerCallInput;
-      xcmCall: XcmVersionedXcm;
-    };
-  };
-  batchCall: Uint8Array | null; // The final Utility.batch_all call (needs chain API)
   validation: {
     valid: boolean;
     errors: string[];
@@ -103,50 +77,50 @@ export interface DcaProposal {
 }
 
 /**
- * Calculate fee estimate for the entire operation
+ * Calculate fee estimate for all XCM operations
  */
-function calculateTotalFees(numberOfReturns: number): bigint {
-  // Conservative fee estimates:
-  // - Initial transfer to Hydration: 0.1 DOT
-  // - DCA setup per schedule: 0.05 DOT
-  // - Periodic return per execution: 0.1 USDT equivalent in DOT
-
-  const initialTransferFee = BigInt(1e9); // 0.1 DOT (10 decimals)
-  const dcaSetupFee = BigInt(5e8); // 0.05 DOT per DCA
-  const periodicReturnFee = BigInt(1e9); // 0.1 DOT per return
-
-  // Add buffer
+function calculateFeeEstimate(): bigint {
+  // Conservative fee estimate:
+  // - Transfer DOT: ~0.05 DOT (Hydration deposit side, Asset Hub is UnpaidExecution)
+  // - Start DCA: ~0.05 DOT (Hydration transact)
+  // - Each periodic return: ~0.05 DOT (Hydration + Asset Hub)
+  const totalFee = BigInt(25e8); // 0.25 DOT total
   const bufferPercent = BigInt(DEFAULTS.FEE_BUFFER_PERCENT);
-  const baseFees = initialTransferFee + dcaSetupFee * 2n + periodicReturnFee * BigInt(numberOfReturns);
-  const totalFees = (baseFees * (100n + bufferPercent)) / 100n;
-
-  return totalFees;
+  return (totalFee * (100n + bufferPercent)) / 100n;
 }
 
 /**
- * Calculate DOT fee stash for XCM operations on Hydration
- * This stash is deposited to Asset Hub's sovereign account on Hydration
- * and pays for:
- * - DCA schedule XCM execution fees
- * - Periodic return XCM execution fees
+ * Calculate DOT to reserve as fee stash on Hydration for all operations
  */
-function calculateFeeStash(stablecoin: StablecoinType, numberOfReturns: number): bigint {
-  // Number of DCA schedules depends on stablecoin selection
-  const dcaScheduleCount = stablecoin === 'BOTH' ? 2 : 1;
+function calculateFeeStash(numberOfReturns: number): bigint {
+  const perOpFee = BigInt(5e8); // 0.05 DOT per operation
+  // Fee for DCA start + all periodic returns
+  const totalOps = BigInt(1 + numberOfReturns);
+  const bufferPercent = BigInt(DEFAULTS.FEE_BUFFER_PERCENT);
+  return (perOpFee * totalOps * (100n + bufferPercent)) / 100n;
+}
 
-  // Fee estimates per operation (in DOT with 10 decimals)
-  const dcaFeePerSchedule = BigInt(5e8); // 0.05 DOT per DCA schedule setup
-  const returnFeePerExecution = BigInt(5e8); // 0.05 DOT per periodic return
+/**
+ * Estimate total stablecoins accumulated from DCA
+ */
+export function estimateTotalStablesAccumulated(
+  totalDotAmount: bigint,
+  dotPriceInUsd: number,
+  stablecoin: StablecoinType,
+  stablecoinDecimals: number = 6
+): { usdt: bigint; usdc: bigint } {
+  const dotInFloat = Number(totalDotAmount) / 1e10;
+  const totalUsdValue = dotInFloat * dotPriceInUsd;
+  const totalUsdBigInt = BigInt(Math.floor(totalUsdValue * 10 ** stablecoinDecimals));
 
-  // Calculate total fees needed
-  const dcaFees = dcaFeePerSchedule * BigInt(dcaScheduleCount);
-  const returnFees = returnFeePerExecution * BigInt(numberOfReturns);
-  const baseFeeStash = dcaFees + returnFees;
-
-  // Add 20% buffer for safety margin
-  const feeStash = (baseFeeStash * 120n) / 100n;
-
-  return feeStash;
+  if (stablecoin === 'USDT') {
+    return { usdt: totalUsdBigInt, usdc: 0n };
+  } else if (stablecoin === 'USDC') {
+    return { usdt: 0n, usdc: totalUsdBigInt };
+  } else {
+    const half = totalUsdBigInt / 2n;
+    return { usdt: half, usdc: half };
+  }
 }
 
 /**
@@ -171,21 +145,17 @@ function validateInputs(inputs: DcaWizardInputs): { valid: boolean; errors: stri
     errors.push('Slippage must be between 0.1% and 10%');
   }
 
+  if (inputs.treasurySplitPercent < 0 || inputs.treasurySplitPercent > 100) {
+    errors.push('Treasury split must be between 0% and 100%');
+  }
+
+  if (inputs.returnFrequencyDays <= 0) {
+    errors.push('Return frequency must be greater than 0 days');
+  }
+
   if (inputs.numberOfReturns <= 0) {
     errors.push('Number of returns must be greater than 0');
   }
-
-  if (inputs.treasurySplitPercent + inputs.salarySplitPercent !== 100) {
-    errors.push('Treasury and salary split percentages must sum to 100');
-  }
-
-  // Validate periodic return schedule
-  const periodicValidation = validatePeriodicReturnParams(
-    inputs.returnFrequencyDays,
-    inputs.numberOfReturns,
-    inputs.dcaDurationDays
-  );
-  errors.push(...periodicValidation.errors);
 
   return {
     valid: errors.length === 0,
@@ -199,56 +169,45 @@ function validateInputs(inputs: DcaWizardInputs): { valid: boolean; errors: stri
 function generateWarnings(inputs: DcaWizardInputs): string[] {
   const warnings: string[] = [];
 
-  // Warn if DCA trades are very frequent
   if (inputs.dcaFrequencyBlocks < 100) {
     warnings.push(
       'DCA frequency is very high. This may result in higher fees relative to trade size.'
     );
   }
 
-  // Warn if DOT amount is very large
-  const largeAmount = BigInt(10000) * BigInt(10 ** 10); // 10,000 DOT
+  const largeAmount = BigInt(10000) * BigInt(10 ** 10);
   if (inputs.dotAmount > largeAmount) {
     warnings.push(
       'This is a large DOT amount. Consider testing with smaller amounts first on Paseo testnet.'
     );
   }
 
-  // Warn if slippage is high
   if (inputs.slippagePercent > 5) {
     warnings.push(
       'High slippage tolerance may result in unfavorable trade execution.'
     );
   }
 
-  // Warn about price volatility
   warnings.push(
     'Estimates assume current DOT price. Actual stablecoin amounts will vary with market prices.'
-  );
-
-  // Warn about governance execution time
-  warnings.push(
-    'This proposal must pass through governance voting before execution. This typically takes 2-4 weeks.'
   );
 
   return warnings;
 }
 
 /**
- * Build complete DCA governance proposal
+ * Build the DCA proposal (calculations and validation only).
+ * Call encodeBatchCall() to encode the complete batched proposal.
  */
 export async function buildDcaProposal(
   inputs: DcaWizardInputs,
-  dotPriceInUsd: number = 5.0 // Default price, should come from oracle
+  dotPriceInUsd: number = 5.0
 ): Promise<DcaProposal> {
-  // Validate inputs
   const validation = validateInputs(inputs);
   if (!validation.valid) {
     return {
       inputs,
       calculations: {} as DcaCalculations,
-      calls: {} as any,
-      batchCall: null,
       validation: {
         valid: false,
         errors: validation.errors,
@@ -257,7 +216,7 @@ export async function buildDcaProposal(
     };
   }
 
-  // Get sovereign account for Collectives parachain from Hydration's runtime API
+  // Get Plurality sovereign account on Hydration
   const collectivesParaId = getParachainId(inputs.network, 'COLLECTIVES');
   const sovereignAccount = await getSovereignAccount(inputs.network, collectivesParaId);
 
@@ -272,100 +231,35 @@ export async function buildDcaProposal(
     inputs.stablecoin
   );
 
-  // Calculate fees
-  const feeEstimate = calculateTotalFees(inputs.numberOfReturns);
-
-  // Calculate fee stash for XCM operations on Hydration
-  const feeStash = calculateFeeStash(inputs.stablecoin, inputs.numberOfReturns);
-
-  // Calculate periodic return parameters
-  const periodicReturnSchedule = calculatePeriodicReturnParams(
+  // Calculate per-return amounts
+  const periodicReturn = calculatePeriodicReturnParams(
     inputs.returnFrequencyDays,
     inputs.numberOfReturns,
     estimatedUsdtTotal,
     estimatedUsdcTotal
   );
 
+  const feeEstimate = calculateFeeEstimate();
+  const feeStash = calculateFeeStash(inputs.numberOfReturns);
+
   const calculations: DcaCalculations = {
     totalTrades,
     dotPerTrade,
     estimatedUsdtTotal,
     estimatedUsdcTotal,
-    estimatedUsdtPerReturn: periodicReturnSchedule.usdtAmountPerReturn,
-    estimatedUsdcPerReturn: periodicReturnSchedule.usdcAmountPerReturn,
+    estimatedUsdtPerReturn: periodicReturn.usdtAmountPerReturn,
+    estimatedUsdcPerReturn: periodicReturn.usdcAmountPerReturn,
     totalDurationBlocks: daysToBlocks(inputs.dcaDurationDays),
     sovereignAccount,
     feeEstimate,
     feeStash,
   };
 
-  // Build calls
-
-  // 1. Treasury spend - send DOT to Hydration (includes fee stash for XCM operations)
-  const treasurySpend = buildTreasuryToHydrationXcm(
-    inputs.network,
-    inputs.dotAmount,
-    feeEstimate,
-    feeStash
-  );
-
-  // 2. DCA schedule - set up DCA on Hydration (after warm-up period)
-  const expectedOutputPerTrade = estimateStablecoinPerTrade(dotPerTrade, dotPriceInUsd);
-  const dcaScheduleCalls = buildDcaScheduleCalls(
-    inputs.network,
-    sovereignAccount,
-    inputs.stablecoin,
-    inputs.dcaFrequencyBlocks,
-    inputs.slippagePercent,
-    dotPerTrade,
-    expectedOutputPerTrade
-  );
-
-  const dcaSchedule = await Promise.all(
-    dcaScheduleCalls.map(async (dca) => {
-      // Encode the DCA.schedule call using Hydration API
-      const dcaCallEncoded = await encodeDcaScheduleCall(inputs.network, dca.params);
-
-      // Build XCM to schedule DCA
-      const xcmCall = buildDcaScheduleXcm(
-        inputs.network,
-        dcaCallEncoded,
-        BigInt(5e8) // 0.05 DOT for fees
-      );
-
-      return {
-        stablecoin: dca.stablecoin,
-        schedulerCall: {
-          after: TIMING.WARM_UP_BLOCKS,
-          maybe_periodic: null, // One-time execution
-          priority: 128,
-        },
-        xcmCall,
-      };
-    })
-  );
-
-  // 3. Periodic return - schedule periodic transfers back to Asset Hub
-  const periodicReturnFee = estimatePeriodicReturnFee();
-  const periodicReturn = buildPeriodicReturnSchedulerCall(
-    inputs.network,
-    periodicReturnSchedule,
-    periodicReturnFee,
-    inputs.treasurySplitPercent
-  );
-
-  // Generate warnings
   const warnings = generateWarnings(inputs);
 
   return {
     inputs,
     calculations,
-    calls: {
-      treasurySpend,
-      dcaSchedule,
-      periodicReturn,
-    },
-    batchCall: null, // Will be populated when chain API is available
     validation: {
       valid: true,
       errors: [],
@@ -375,75 +269,130 @@ export async function buildDcaProposal(
 }
 
 /**
- * Encode the final batch call for the referendum
- * Uses the Asset Hub chain's TypedApi from polkadot-api via smoldot light client
+ * Encode the complete batched proposal call.
+ *
+ * Produces a single Utility.batch_all call on the Collectives chain containing:
+ * 1. PolkadotXcm.send → Asset Hub (transfer DOT, immediate)
+ * 2. Scheduler.schedule_after → PolkadotXcm.send → Hydration (start DCA)
+ * 3. Scheduler.schedule_after(maybe_periodic) → PolkadotXcm.send → Hydration (returns)
+ *
+ * Returns the hex-encoded call data for the Collectives referendum.
  */
 export async function encodeBatchCall(
-  proposal: DcaProposal
-) {
-  const { getAssetHubApi } = await import('../api/clients/dotAh');
-  const { Enum } = await import('polkadot-api');
-  const { DispatchRawOrigin, XcmVersionedLocation, XcmV5Junctions, XcmV5Junction } = await import('@polkadot-api/descriptors');
+  proposal: DcaProposal,
+  dotPriceInUsd: number = 5.0
+): Promise<string> {
+  const { getCollectivesApi } = await import('../api/clients/collectives');
+  const { XcmVersionedLocation, XcmV5Junctions, XcmV5Junction } = await import('@polkadot-api/descriptors');
 
-  // Get the typed API (connects via smoldot light client)
-  const ahApi = await getAssetHubApi(proposal.inputs.network);
+  const collectivesApi = await getCollectivesApi(proposal.inputs.network);
+  const assetHubParaId = getParachainId(proposal.inputs.network, 'ASSET_HUB');
   const hydrationParaId = getParachainId(proposal.inputs.network, 'HYDRATION');
 
-  // Build the destination location for Hydration
+  // Destinations
+  const assetHubDest = XcmVersionedLocation.V5({
+    parents: 1,
+    interior: XcmV5Junctions.X1(XcmV5Junction.Parachain(assetHubParaId)),
+  });
+
   const hydrationDest = XcmVersionedLocation.V5({
     parents: 1,
     interior: XcmV5Junctions.X1(XcmV5Junction.Parachain(hydrationParaId)),
   });
 
-  // 1. Treasury Spend - Send DOT to Hydration
-  // NOTE: The treasury has an associated account (ACCOUNTS.TREASURY) that holds funds.
-  // Using dispatch_as with Signed origin is valid because this call will be executed
-  // via a referendum with Root origin, which has permission to dispatch_as any account.
-  // The referendum's Root origin grants the authority to act on behalf of the treasury account.
-  const treasuryCall = ahApi.tx.Utility.dispatch_as({
-    as_origin: Enum('system', DispatchRawOrigin.Signed(ACCOUNTS.TREASURY)),
-    call: ahApi.tx.PolkadotXcm.execute({
-      message: proposal.calls.treasurySpend,
-      max_weight: { ref_time: 10_000_000_000n, proof_size: 100_000n },
-    }).decodedCall,
-  }).decodedCall;
-
-  // 2. Schedule DCA Setup calls (one or two depending on stablecoin selection)
-  const dcaScheduleCalls = proposal.calls.dcaSchedule.map((dcaSchedule) =>
-    ahApi.tx.Scheduler.schedule_after({
-      after: TIMING.WARM_UP_BLOCKS,
-      maybe_periodic: undefined,
-      priority: 128,
-      call: ahApi.tx.PolkadotXcm.send({
-        dest: hydrationDest,
-        message: dcaSchedule.xcmCall,
-      }).decodedCall,
-    }).decodedCall
+  // ---- Step 1: Transfer DOT (immediate) ----
+  const treasuryXcm = buildTreasuryToHydrationXcm(
+    proposal.inputs.network,
+    proposal.inputs.dotAmount,
+    proposal.calculations.feeStash
   );
 
-  // 3. Schedule Periodic Returns
-  const { schedulerCall } = proposal.calls.periodicReturn;
-  if (!schedulerCall.maybe_periodic) {
-    throw new Error('Periodic return schedulerCall must have maybe_periodic defined');
-  }
-  const periodicCall = ahApi.tx.Scheduler.schedule_after({
-    after: schedulerCall.after,
-    maybe_periodic: [
-      schedulerCall.maybe_periodic.period,
-      schedulerCall.maybe_periodic.repetitions,
-    ],
+  const transferCall = collectivesApi.tx.PolkadotXcm.send({
+    dest: assetHubDest,
+    message: treasuryXcm,
+  });
+
+  // ---- Step 2: Start DCA (scheduled after warmup) ----
+  const dotPerTrade = proposal.calculations.dotPerTrade;
+  const expectedOutputPerTrade = estimateStablecoinPerTrade(dotPerTrade, dotPriceInUsd);
+
+  const dcaScheduleCalls = buildDcaScheduleCalls(
+    proposal.inputs.network,
+    proposal.calculations.sovereignAccount,
+    proposal.inputs.stablecoin,
+    proposal.inputs.dcaFrequencyBlocks,
+    proposal.inputs.slippagePercent,
+    dotPerTrade,
+    expectedOutputPerTrade
+  );
+
+  const encodedDcaCalls = await Promise.all(
+    dcaScheduleCalls.map(dca => encodeDcaScheduleCall(proposal.inputs.network, dca.params))
+  );
+
+  const dcaCallEncoded = encodedDcaCalls[0];
+
+  const dcaFeeAmount = BigInt(5e8); // 0.05 DOT
+  const dcaXcm = buildDcaScheduleXcm(dcaCallEncoded, dcaFeeAmount);
+
+  const dcaSendCall = collectivesApi.tx.PolkadotXcm.send({
+    dest: hydrationDest,
+    message: dcaXcm,
+  });
+
+  const dcaSchedulerCall = collectivesApi.tx.Scheduler.schedule_after({
+    after: TIMING.WARM_UP_BLOCKS,
+    maybe_periodic: undefined,
     priority: 128,
-    call: ahApi.tx.PolkadotXcm.send({
-      dest: hydrationDest,
-      message: proposal.calls.periodicReturn.xcmCall,
-    }).decodedCall,
-  }).decodedCall;
+    call: dcaSendCall.decodedCall,
+  });
 
-  // Combine all calls
-  const allCalls = [treasuryCall, ...dcaScheduleCalls, periodicCall];
+  // ---- Step 3: Periodic returns (scheduled with maybe_periodic) ----
+  const { usdt: estimatedUsdtTotal, usdc: estimatedUsdcTotal } = estimateTotalStablesAccumulated(
+    proposal.inputs.dotAmount,
+    dotPriceInUsd,
+    proposal.inputs.stablecoin
+  );
 
-  // Create the batch_all call
-  const batchCall = ahApi.tx.Utility.batch_all({ calls: allCalls });
+  const periodicReturnParams = calculatePeriodicReturnParams(
+    proposal.inputs.returnFrequencyDays,
+    proposal.inputs.numberOfReturns,
+    estimatedUsdtTotal,
+    estimatedUsdcTotal
+  );
+
+  const returnFeeAmount = estimatePeriodicReturnFee();
+
+  const periodicReturn = buildPeriodicReturnSchedulerCall(
+    proposal.inputs.network,
+    periodicReturnParams,
+    returnFeeAmount,
+    proposal.inputs.treasurySplitPercent
+  );
+
+  const returnSendCall = collectivesApi.tx.PolkadotXcm.send({
+    dest: hydrationDest,
+    message: periodicReturn.xcmCall,
+  });
+
+  const returnSchedulerCall = collectivesApi.tx.Scheduler.schedule_after({
+    after: periodicReturn.schedulerCall.after,
+    maybe_periodic: periodicReturn.schedulerCall.maybe_periodic
+      ? [periodicReturn.schedulerCall.maybe_periodic.period, periodicReturn.schedulerCall.maybe_periodic.repetitions] as [number, number]
+      : undefined,
+    priority: periodicReturn.schedulerCall.priority,
+    call: returnSendCall.decodedCall,
+  });
+
+  // ---- Batch all three calls ----
+  const batchCall = collectivesApi.tx.Utility.batch_all({
+    calls: [
+      transferCall.decodedCall,
+      dcaSchedulerCall.decodedCall,
+      returnSchedulerCall.decodedCall,
+    ],
+  });
+
   const encoded = await batchCall.getEncodedData();
   return encoded.asHex();
 }
@@ -473,18 +422,19 @@ Estimated Output:
 - USDT: ${Number(calculations.estimatedUsdtTotal) / 1e6}
 - USDC: ${Number(calculations.estimatedUsdcTotal) / 1e6}
 
-Return Schedule:
-- Frequency: Every ${inputs.returnFrequencyDays} day(s)
+Periodic Returns:
+- Frequency: Every ${inputs.returnFrequencyDays} days
 - Number of Returns: ${inputs.numberOfReturns}
-- USDT per Return: ${Number(calculations.estimatedUsdtPerReturn) / 1e6}
-- USDC per Return: ${Number(calculations.estimatedUsdcPerReturn) / 1e6}
+- USDT per Return: ~${Number(calculations.estimatedUsdtPerReturn) / 1e6}
+- USDC per Return: ~${Number(calculations.estimatedUsdcPerReturn) / 1e6}
 
 Split Configuration:
 - Fellowship Treasury: ${inputs.treasurySplitPercent}%
 - Fellowship Salary: ${inputs.salarySplitPercent}%
 
-Fees:
-- Estimated Fees (Asset Hub): ${Number(calculations.feeEstimate) / 1e10} DOT
-- XCM Fee Stash (Hydration): ${Number(calculations.feeStash) / 1e10} DOT
+Governance: Collectives chain, Architects track (Dan 4+)
+Single batched proposal with Scheduler for DCA start and periodic returns.
+
+Fees: ~${Number(calculations.feeEstimate) / 1e10} DOT
   `.trim();
 }

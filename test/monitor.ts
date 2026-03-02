@@ -5,7 +5,7 @@
 
 import type { SS58String } from "polkadot-api";
 import type { ChopsticksClients } from "./setup";
-import { advanceAllBlocks, advanceHydrationBlocks } from "./setup";
+import { advanceAllBlocks, advanceCollectivesBlocks, advanceHydrationBlocks } from "./setup";
 import { HYDRATION_ASSETS, DECIMALS } from "./constants";
 
 // Track active DCAs for monitoring
@@ -253,6 +253,61 @@ export async function monitorSchedulerEvents(
     }
 
     await clients.ahClient._request("dev_newBlock", [{ count: 1 }]);
+  }
+
+  return events;
+}
+
+/**
+ * Advance Collectives blocks one at a time, monitoring for Scheduler events.
+ * The Collectives scheduler uses parachain block numbers (BlockNumberProvider = System).
+ */
+export async function monitorCollectivesSchedulerEvents(
+  clients: ChopsticksClients,
+  count: number
+): Promise<Array<{ block: number; payload: unknown }>> {
+  const events: Array<{ block: number; payload: unknown }> = [];
+
+  for (let i = 0; i < count; i++) {
+    await advanceCollectivesBlocks(clients, 1);
+    const currentBlock = await clients.collectivesApi.query.System.Number.getValue();
+    console.log(`  Advanced to Collectives block ${currentBlock}`);
+
+    // Check agenda for next block to see if entry is still pending
+    const nextAgenda = await clients.collectivesApi.query.Scheduler.Agenda.getValue(Number(currentBlock) + 1);
+    if (nextAgenda.length > 0) {
+      console.log(`  Agenda at block ${Number(currentBlock) + 1}: ${nextAgenda.length} pending entries`);
+    }
+
+    // Read system events directly as a fallback
+    const systemEvents = await clients.collectivesApi.query.System.Events.getValue();
+    const schedulerEvents = systemEvents.filter(
+      (e: { event: { type: string } }) => e.event.type === "Scheduler"
+    );
+    if (schedulerEvents.length > 0) {
+      for (const se of schedulerEvents) {
+        console.log(`  [Collectives block ${currentBlock}] System.Events Scheduler: ${JSON.stringify(se.event, (_, v) => typeof v === 'bigint' ? v.toString() : v)}`);
+      }
+    }
+
+    const dispatchedEvents = await clients.collectivesApi.event.Scheduler.Dispatched.pull();
+    for (const event of dispatchedEvents) {
+      events.push({
+        block: Number(currentBlock),
+        payload: event.payload,
+      });
+      console.log(`  [Collectives block ${currentBlock}] Scheduler.Dispatched (pull): result=${JSON.stringify(event.payload.result)}`);
+    }
+
+    // Also check for XCM sent events
+    try {
+      const sentEvents = await clients.collectivesApi.event.PolkadotXcm.Sent.pull();
+      for (const _event of sentEvents) {
+        console.log(`  [Collectives block ${currentBlock}] PolkadotXcm.Sent`);
+      }
+    } catch {
+      // Event may not exist
+    }
   }
 
   return events;

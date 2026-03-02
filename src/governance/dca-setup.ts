@@ -209,15 +209,24 @@ export async function getSovereignAccount(
   parachainId: number
 ): Promise<string> {
   const { getHydrationApi } = await import('../api/clients/hydration');
-  const { HydrationXcmVersionedLocation, XcmV3Junctions, XcmV3Junction } = await import('@polkadot-api/descriptors');
+  const { HydrationXcmVersionedLocation, XcmV3Junctions, XcmV3Junction, XcmV3JunctionBodyId, XcmV2JunctionBodyPart } = await import('@polkadot-api/descriptors');
 
   const hydrationApi = await getHydrationApi(network);
 
-  // Build the versioned XCM location for the parachain (from Hydration's perspective)
-  // V4 locations use the same structure as V3
+  // Build the versioned XCM location for the Plurality sovereign (from Hydration's perspective)
+  // When PolkadotXcm.send() is called with Architects origin, the pallet prepends
+  // DescendOrigin(Plurality(Treasury, Voice)). On Hydration this means the origin is
+  // (1, [Parachain(collectivesParaId), Plurality(Treasury, Voice)]) — a different
+  // account from the plain parachain sovereign. All DOT/stables must be deposited here.
   const location = HydrationXcmVersionedLocation.V4({
     parents: 1,
-    interior: XcmV3Junctions.X1(XcmV3Junction.Parachain(parachainId)),
+    interior: XcmV3Junctions.X2([
+      XcmV3Junction.Parachain(parachainId),
+      XcmV3Junction.Plurality({
+        id: XcmV3JunctionBodyId.Treasury(),
+        part: XcmV2JunctionBodyPart.Voice(),
+      }),
+    ]),
   });
 
   // Use Hydration's runtime API to convert location to account

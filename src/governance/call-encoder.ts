@@ -1,6 +1,6 @@
 /**
  * Call Encoder Utilities
- * Helpers for encoding and displaying transaction calls
+ * Helpers for encoding and displaying the single batched proposal
  */
 
 import type { DcaProposal } from './builder';
@@ -39,56 +39,47 @@ export async function generateCallHash(data: Uint8Array): Promise<string> {
 }
 
 /**
- * Get transaction breakdown for display
+ * Get transaction breakdown for the single batched proposal
  */
-export function getTransactionBreakdown(proposal: DcaProposal): {
+export function getTransactionBreakdown(
+  proposal: DcaProposal
+): {
   calls: Array<{
     name: string;
     description: string;
     pallet: string;
     call: string;
+    timing: string;
   }>;
   totalCalls: number;
 } {
-  const calls: Array<{
-    name: string;
-    description: string;
-    pallet: string;
-    call: string;
-  }> = [];
+  const dotAmountDisplay = Number(proposal.inputs.dotAmount) / 1e10;
+  const stablecoin = proposal.inputs.stablecoin;
+  const { inputs } = proposal;
 
-  // 1. Treasury Spend
-  calls.push({
-    name: 'Treasury Spend',
-    pallet: 'Utility',
-    call: 'dispatch_as',
-    description: `Send ${Number(proposal.inputs.dotAmount) / 1e10} DOT from treasury to Hydration`,
-  });
-
-  // 2. DCA Schedule(s)
-  const dcaCount = proposal.inputs.stablecoin === 'BOTH' ? 2 : 1;
-  for (let i = 0; i < dcaCount; i++) {
-    const stablecoin =
-      proposal.inputs.stablecoin === 'BOTH'
-        ? i === 0
-          ? 'USDT'
-          : 'USDC'
-        : proposal.inputs.stablecoin;
-    calls.push({
-      name: `DCA Setup (${stablecoin})`,
-      pallet: 'Scheduler',
-      call: 'schedule_after',
-      description: `Schedule DCA to convert DOT to ${stablecoin} on Hydration`,
-    });
-  }
-
-  // 3. Periodic Return
-  calls.push({
-    name: 'Periodic Returns',
-    pallet: 'Scheduler',
-    call: 'schedule_after',
-    description: `Schedule ${proposal.inputs.numberOfReturns} periodic returns with 70/30 split`,
-  });
+  const calls = [
+    {
+      name: 'Transfer DOT',
+      pallet: 'PolkadotXcm',
+      call: 'send → Asset Hub',
+      description: `Send ${dotAmountDisplay} DOT from Fellowship Treasury to Hydration (Plurality sovereign)`,
+      timing: 'Immediate',
+    },
+    {
+      name: `Start DCA (${stablecoin})`,
+      pallet: 'Scheduler → PolkadotXcm',
+      call: 'schedule_after → send → Hydration',
+      description: `Start DCA trading DOT → ${stablecoin} on Hydration after warmup (~${Math.round((100 * 6) / 60)} min)`,
+      timing: `After 100 blocks`,
+    },
+    {
+      name: 'Periodic Returns',
+      pallet: 'Scheduler → PolkadotXcm',
+      call: 'schedule_after(periodic) → send → Hydration',
+      description: `Return ${stablecoin} to Fellowship Treasury (${inputs.treasurySplitPercent}%) / Salary (${inputs.salarySplitPercent}%) every ${inputs.returnFrequencyDays} days, ${inputs.numberOfReturns} times`,
+      timing: `Every ${inputs.returnFrequencyDays} days`,
+    },
+  ];
 
   return {
     calls,
@@ -97,48 +88,18 @@ export function getTransactionBreakdown(proposal: DcaProposal): {
 }
 
 /**
- * Instructions for generating chain descriptors
+ * Encode the single batched proposal
  */
-export const DESCRIPTOR_INSTRUCTIONS = `
-Chain descriptors have been generated! ✓
-
-Generated descriptors:
-- Asset Hub (dotAh): .papi/descriptors/dist/dotAh.d.ts
-- Hydration: .papi/descriptors/dist/hydration.d.ts
-
-Current status:
-✓ Descriptors generated
-✓ DCA.schedule call encoding implemented
-⚠ XCM message encoding in progress
-
-To complete the implementation:
-
-1. The XCM V4 messages need to be properly encoded using the PolkadotXcm pallet
-2. The Scheduler calls need to wrap the XCM messages
-3. The Utility.batch_all needs to combine all calls
-
-The core infrastructure is in place. The remaining work involves:
-- Converting XCM type definitions to descriptor-compatible format
-- Proper encoding of nested XCM instructions
-- Integration with PolkadotXcm.send() calls
-
-For reference, see:
-- src/governance/xcm-messages.ts - XCM message builders
-- src/governance/builder.ts - encodeBatchCall() function
-- src/governance/dca-setup.ts - encodeDcaScheduleCall() function
-`.trim();
-
-/**
- * Encode the complete proposal call
- * Uses the generated chain descriptors
- */
-export async function encodeProposalCall(proposal: DcaProposal): Promise<{
+export async function encodeProposal(
+  proposal: DcaProposal,
+  dotPriceInUsd: number
+): Promise<{
   encoded: string | null;
   error: string | null;
 }> {
   try {
     const { encodeBatchCall } = await import('./builder');
-    const encoded = await encodeBatchCall(proposal);
+    const encoded = await encodeBatchCall(proposal, dotPriceInUsd);
     return {
       encoded,
       error: null,

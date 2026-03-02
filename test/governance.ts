@@ -217,3 +217,74 @@ export async function processCallForExecution(
     size: callSize,
   };
 }
+
+/**
+ * Execute a batch call on Collectives chain with Architects (FellowshipOrigins) origin.
+ * Injects the call into the Collectives scheduler via dev_setStorage.
+ */
+export async function executeCollectivesBatchCall(
+  clients: ChopsticksClients,
+  encodedCallHex: string
+) {
+  console.log("Injecting batch call into Collectives scheduler with Architects origin...");
+
+  const callData = Binary.fromHex(encodedCallHex);
+  const callSize = callData.asBytes().length;
+  const { hashHex } = computeCallHash(callData);
+
+  console.log(`Batch call size: ${callSize} bytes`);
+  console.log(`Batch call hash: ${hashHex}`);
+
+  // 1. Set scheduler entry FIRST via dev_setStorage (schedules at block N+2 to leave room)
+  const currentBlock = await clients.collectivesApi.query.System.Number.getValue();
+  const executeAtBlock = Number(currentBlock) + 2;
+
+  console.log(`Scheduling execution at Collectives block ${executeAtBlock}`);
+  console.log(`Setting incompleteSince to ${executeAtBlock}`);
+
+  await clients.collectivesClient._request("dev_setStorage", [
+    {
+      scheduler: {
+        agenda: [
+          [
+            [executeAtBlock],
+            [
+              {
+                call: {
+                  Lookup: {
+                    hash: hashHex,
+                    len: callSize,
+                  },
+                },
+                origin: {
+                  FellowshipOrigins: "Architects",
+                },
+              },
+            ],
+          ],
+        ],
+        incompleteSince: executeAtBlock,
+      },
+    },
+  ]);
+
+  // 2. Store preimage via note_preimage AFTER dev_setStorage
+  //    This builds on the modified state, so both coexist
+  const collectivesSigner = createAliceSigner();
+  await clients.collectivesApi.tx.Preimage.note_preimage({
+    bytes: callData,
+  }).signAndSubmit(collectivesSigner);
+  console.log("Preimage stored on Collectives");
+
+  // Verify
+  const agenda = await clients.collectivesApi.query.Scheduler.Agenda.getValue(executeAtBlock);
+  console.log(`Agenda at block ${executeAtBlock}: ${agenda.length} entries`);
+
+  console.log(`Batch call scheduled for Collectives block ${executeAtBlock} with Architects origin`);
+
+  return {
+    executeAtBlock,
+    hash: hashHex,
+    size: callSize,
+  };
+}

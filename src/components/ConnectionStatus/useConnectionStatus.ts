@@ -5,8 +5,9 @@ export function useConnectionStatus(): ConnectionStatusSummary {
   const [status, setStatus] = useState<ConnectionStatusSummary>(() => ({
     assetHub: { chain: 'assetHub', state: 'disconnected', timestamp: Date.now() },
     hydration: { chain: 'hydration', state: 'disconnected', timestamp: Date.now() },
+    collectives: { chain: 'collectives', state: 'disconnected', timestamp: Date.now() },
     connectedCount: 0,
-    totalCount: 2,
+    totalCount: 3,
     overallState: 'disconnected',
   }));
 

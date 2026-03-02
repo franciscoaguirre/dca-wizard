@@ -162,10 +162,24 @@ export function SubmitProposal({ proposal, onBack }: SubmitProposalProps) {
               </span>
             </div>
 
-            <div className="flex justify-between py-3 last:pb-0">
+            <div className="flex justify-between py-3">
               <span className="text-sm font-medium text-neutral-700">Total Trades:</span>
               <span className="text-sm text-neutral-600">
                 {proposal.calculations.totalTrades}
+              </span>
+            </div>
+
+            <div className="flex justify-between py-3">
+              <span className="text-sm font-medium text-neutral-700">Returns:</span>
+              <span className="text-sm text-neutral-600">
+                {proposal.inputs.numberOfReturns}x every {proposal.inputs.returnFrequencyDays} days
+              </span>
+            </div>
+
+            <div className="flex justify-between py-3 last:pb-0">
+              <span className="text-sm font-medium text-neutral-700">Chain:</span>
+              <span className="text-sm text-neutral-600">
+                Collectives (Architects track)
               </span>
             </div>
           </div>
@@ -186,13 +200,16 @@ export function SubmitProposal({ proposal, onBack }: SubmitProposalProps) {
               Your account must have sufficient DOT for the submission deposit (typically ~100 DOT)
             </li>
             <li>
-              The proposal will be submitted as a referendum to the Treasury track
+              You must have Architect rank (Dan 4+) on the Collectives chain to submit
             </li>
             <li>
-              After submission, the community will vote on the proposal
+              The proposal will be submitted to the Collectives chain's Architects track
             </li>
             <li>
-              If approved, the proposal will execute automatically after the decision period
+              After submission, Fellowship members will vote on the proposal
+            </li>
+            <li>
+              If approved, the proposal will execute automatically
             </li>
           </ul>
         </CardContent>
@@ -265,12 +282,17 @@ export function SubmitProposal({ proposal, onBack }: SubmitProposalProps) {
           This is a prototype. Full wallet integration with ReactiveDot/polkadot-api is required
           for actual submission. The submission flow would involve:
           <ul className="list-disc list-inside mt-2 space-y-1">
-            <li>Building the complete Utility.batch_all call with chain descriptors</li>
+            <li>Connecting to the Collectives chain via wallet</li>
+            <li>Encoding the single Utility.batch_all call (already generated in preview)</li>
             <li>Creating and noting a preimage if the call exceeds size limits</li>
-            <li>Submitting via Referenda.submit with appropriate origin and track</li>
+            <li>Submitting via FellowshipReferenda.submit on the Architects track</li>
             <li>Signing and broadcasting the transaction</li>
             <li>Monitoring events for referendum ID</li>
           </ul>
+          <p className="mt-2">
+            The batch contains: immediate DOT transfer, scheduled DCA start, and scheduled periodic returns
+            — all executed via a single Collectives referendum.
+          </p>
         </AlertDescription>
       </Alert>
     </div>

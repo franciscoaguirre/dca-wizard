@@ -1,0 +1,17 @@
+# Chopsticks configuration for Polkadot Collectives
+# Start with: npx @acala-network/chopsticks@latest --config test/chopsticks/collectives.yml
+
+endpoint: wss://polkadot-collectives-rpc.polkadot.io
+mock-signature-host: true
+db: ./test/chopsticks/db/collectives.db
+port: 8003
+wasm-override: ../../fellowship/runtimes/collectives_polkadot.wasm
+
+import-storage:
+  System:
+    Account:
+      # Fund Alice (dev account) for preimage storage fees
+      - - - 5GrwvaEF5zXb26Fz9rcQpDWS57CtERHpNehXCPcNoHGKutQY
+        - providers: 1
+          data:
+            free: '100000000000000000' # 10,000,000 DOT

@@ -213,13 +213,13 @@ export function DcaWizardForm({ state, dispatch, onNext }: DcaWizardFormProps) {
         </CardContent>
       </Card>
 
-      {/* Return Settings - Compact */}
+      {/* Periodic Returns */}
       <Card>
         <CardContent className="pt-6">
-          <h2 className="text-lg font-semibold text-neutral-800 mb-4">Return Settings</h2>
+          <h2 className="text-lg font-semibold text-neutral-800 mb-4">Periodic Returns</h2>
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label htmlFor="returnFrequency">Return every</Label>
+              <Label htmlFor="returnFrequency">Return Frequency</Label>
               <div className="flex items-center gap-1">
                 <Input
                   id="returnFrequency"
@@ -234,20 +234,35 @@ export function DcaWizardForm({ state, dispatch, onNext }: DcaWizardFormProps) {
                   }}
                   className="w-full"
                 />
-                <span className="text-sm text-neutral-500 whitespace-nowrap">day(s)</span>
+                <span className="text-sm text-neutral-500 whitespace-nowrap">days</span>
               </div>
+              <p className="text-xs text-neutral-500">
+                How often stablecoins are returned to Treasury/Salary
+              </p>
             </div>
 
             <div className="space-y-2">
-              <Label>Number of returns</Label>
-              <div className="pt-2">
-                <p className="text-lg font-semibold text-neutral-800">
-                  {state.numberOfReturns}
-                </p>
-                <p className="text-xs text-neutral-500">
-                  Auto-calculated to cover {state.dcaDurationDays} days
-                </p>
-              </div>
+              <Label htmlFor="numberOfReturns">Number of Returns</Label>
+              <Input
+                id="numberOfReturns"
+                type="number"
+                min="1"
+                max="52"
+                value={state.numberOfReturns}
+                onChange={(e) => {
+                  const val = parseInt(e.target.value, 10);
+                  if (!isNaN(val) && val > 0) {
+                    dispatch({ type: 'SET_NUMBER_OF_RETURNS', payload: val });
+                  }
+                }}
+                className="w-full"
+              />
+              {state.errors.numberOfReturns && (
+                <p className="text-xs text-error-500">{state.errors.numberOfReturns}</p>
+              )}
+              <p className="text-xs text-neutral-500">
+                Auto-calculated from duration / frequency
+              </p>
             </div>
           </div>
         </CardContent>

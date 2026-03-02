@@ -3,7 +3,7 @@ import { BehaviorSubject, combineLatest, map } from 'rxjs';
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected' | 'error';
 
 export interface ChainConnectionStatus {
-  chain: 'assetHub' | 'hydration';
+  chain: 'assetHub' | 'hydration' | 'collectives';
   state: ConnectionState;
   timestamp: number;
   error?: string;
@@ -12,6 +12,7 @@ export interface ChainConnectionStatus {
 export interface ConnectionStatusSummary {
   assetHub: ChainConnectionStatus;
   hydration: ChainConnectionStatus;
+  collectives: ChainConnectionStatus;
   connectedCount: number;
   totalCount: number;
   overallState: ConnectionState;
@@ -30,21 +31,28 @@ const hydrationStatus$ = new BehaviorSubject<ChainConnectionStatus>({
   timestamp: Date.now(),
 });
 
+const collectivesStatus$ = new BehaviorSubject<ChainConnectionStatus>({
+  chain: 'collectives',
+  state: 'disconnected',
+  timestamp: Date.now(),
+});
+
 // Combine statuses into a summary observable
 export const connectionStatusSummary$ = combineLatest([
   assetHubStatus$,
   hydrationStatus$,
+  collectivesStatus$,
 ]).pipe(
-  map(([assetHub, hydration]) => {
-    const connectedCount = [assetHub, hydration].filter(
+  map(([assetHub, hydration, collectives]) => {
+    const connectedCount = [assetHub, hydration, collectives].filter(
       (status) => status.state === 'connected'
     ).length;
-    const totalCount = 2;
+    const totalCount = 3;
 
     // Determine overall state
     let overallState: ConnectionState = 'disconnected';
 
-    const states = [assetHub.state, hydration.state];
+    const states = [assetHub.state, hydration.state, collectives.state];
 
     if (states.some(s => s === 'error')) {
       overallState = 'error';
@@ -59,6 +67,7 @@ export const connectionStatusSummary$ = combineLatest([
     return {
       assetHub,
       hydration,
+      collectives,
       connectedCount,
       totalCount,
       overallState,
@@ -68,7 +77,7 @@ export const connectionStatusSummary$ = combineLatest([
 
 // Function to update connection status for a specific chain
 export function updateConnectionStatus(
-  chain: 'assetHub' | 'hydration',
+  chain: 'assetHub' | 'hydration' | 'collectives',
   state: ConnectionState,
   error?: string
 ): void {
@@ -81,7 +90,9 @@ export function updateConnectionStatus(
 
   if (chain === 'assetHub') {
     assetHubStatus$.next(status);
-  } else {
+  } else if (chain === 'hydration') {
     hydrationStatus$.next(status);
+  } else {
+    collectivesStatus$.next(status);
   }
 }
