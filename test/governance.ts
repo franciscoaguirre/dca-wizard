@@ -13,6 +13,7 @@ import {
 } from "@polkadot-labs/hdkd-helpers";
 import { blake2b } from "@noble/hashes/blake2.js";
 import type { ChopsticksClients } from "./setup";
+import { advanceCollectivesBlocks } from "./setup";
 
 /**
  * Create a signer for Alice (dev account)
@@ -200,17 +201,7 @@ export async function processCallForExecution(
   console.log(`Call size: ${callSize} bytes`);
   console.log(`Call hash: ${hashHex}`);
 
-  // For calls > 10KB, use preimage storage
-  const PREIMAGE_THRESHOLD = 10 * 1024;
-
-  if (callSize > PREIMAGE_THRESHOLD) {
-    console.log("Call exceeds 10KB, storing as preimage...");
-    await storePreimage(clients, callData);
-  } else {
-    console.log("Call under 10KB, will use inline execution...");
-    // Still store as preimage for consistency
-    await storePreimage(clients, callData);
-  }
+  await storePreimage(clients, callData);
 
   return {
     hash: hashHex,
@@ -235,12 +226,42 @@ export async function executeCollectivesBatchCall(
   console.log(`Batch call size: ${callSize} bytes`);
   console.log(`Batch call hash: ${hashHex}`);
 
-  // 1. Set scheduler entry FIRST via dev_setStorage (schedules at block N+2 to leave room)
+  // Step 1: Store preimage via note_preimage transaction FIRST.
+  // We submit the transaction, then advance a block to include it.
+  // This ensures the runtime itself handles the PreimageFor encoding correctly.
+  const signer = createAliceSigner();
+  console.log("Submitting note_preimage transaction...");
+  const txPromise = clients.collectivesApi.tx.Preimage.note_preimage({
+    bytes: callData,
+  }).signAndSubmit(signer);
+
+  // Give PAPI time to submit the RPC call, then produce a block to include it
+  await new Promise(resolve => setTimeout(resolve, 500));
+  await advanceCollectivesBlocks(clients, 1);
+
+  const txResult = await txPromise;
+  console.log(`note_preimage tx finalized: ${txResult.ok ? "success" : "FAILED"}`);
+  if (!txResult.ok) {
+    console.log(`Dispatch error: ${JSON.stringify(txResult.dispatchError, (_, v) => typeof v === 'bigint' ? v.toString() : v)}`);
+  }
+
+  // Check the Preimage.Noted event to see the actual hash the runtime computed
+  for (const event of txResult.events) {
+    console.log(`  Event: ${event.type}.${event.value.type}`);
+    if (event.type === "Preimage" && event.value.type === "Noted") {
+      const runtimeHash = event.value.value.hash;
+      console.log(`  Runtime preimage hash: ${typeof runtimeHash === 'object' && runtimeHash.asHex ? runtimeHash.asHex() : runtimeHash}`);
+      console.log(`  Our computed hash:     ${hashHex}`);
+      console.log(`  Hashes match: ${(typeof runtimeHash === 'object' && runtimeHash.asHex ? runtimeHash.asHex() : String(runtimeHash)) === hashHex}`);
+    }
+  }
+
+  // Step 2: Now inject the scheduler entry via dev_setStorage.
+  // The preimage is already stored from step 1.
   const currentBlock = await clients.collectivesApi.query.System.Number.getValue();
-  const executeAtBlock = Number(currentBlock) + 2;
+  const executeAtBlock = Number(currentBlock) + 1;
 
   console.log(`Scheduling execution at Collectives block ${executeAtBlock}`);
-  console.log(`Setting incompleteSince to ${executeAtBlock}`);
 
   await clients.collectivesClient._request("dev_setStorage", [
     {
@@ -268,17 +289,25 @@ export async function executeCollectivesBatchCall(
     },
   ]);
 
-  // 2. Store preimage via note_preimage AFTER dev_setStorage
-  //    This builds on the modified state, so both coexist
-  const collectivesSigner = createAliceSigner();
-  await clients.collectivesApi.tx.Preimage.note_preimage({
-    bytes: callData,
-  }).signAndSubmit(collectivesSigner);
-  console.log("Preimage stored on Collectives");
+  console.log("Scheduler entry injected via dev_setStorage");
 
-  // Verify
+  // Verify scheduler agenda and inspect the stored entry
   const agenda = await clients.collectivesApi.query.Scheduler.Agenda.getValue(executeAtBlock);
   console.log(`Agenda at block ${executeAtBlock}: ${agenda.length} entries`);
+  for (const entry of agenda) {
+    if (entry) {
+      console.log(`  Agenda entry call type: ${entry.call.type}`);
+      if (entry.call.type === "Lookup") {
+        const lookupHash = entry.call.value.hash.asHex();
+        const lookupLen = entry.call.value.len;
+        console.log(`  Lookup hash: ${lookupHash}`);
+        console.log(`  Lookup len:  ${lookupLen}`);
+        console.log(`  Hash matches our computed hash: ${lookupHash === hashHex}`);
+        console.log(`  Len matches callSize: ${lookupLen === callSize}`);
+      }
+      console.log(`  Origin: ${JSON.stringify(entry.origin, (_, v) => typeof v === 'bigint' ? v.toString() : v)}`);
+    }
+  }
 
   console.log(`Batch call scheduled for Collectives block ${executeAtBlock} with Architects origin`);
 

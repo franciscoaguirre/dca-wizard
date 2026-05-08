@@ -1,15 +1,18 @@
 /**
  * Hydration chain client
- * Handles connections and operations for Hydration parachain
- * Uses shared smoldot light client instance
+ * Provider is selected by `provider-mode`: smoldot light client or WS RPC.
  */
 
 import { createClient } from 'polkadot-api';
 import { getSmProvider } from 'polkadot-api/sm-provider';
+import { getWsProvider } from 'polkadot-api/ws-provider';
+import { withPolkadotSdkCompat } from 'polkadot-api/polkadot-sdk-compat';
 import { hydration } from '../../../.papi/descriptors/dist';
 import type { NetworkType } from '../constants';
+import { getChainEndpoint } from '../constants';
 import { updateConnectionStatus } from './connection-status';
 import { addParachain } from './smoldot-manager';
+import { getProviderMode, providerModeChange$ } from './provider-mode';
 
 let hydrationClient: ReturnType<typeof createClient> | null = null;
 let hydrationApi: ReturnType<ReturnType<typeof createClient>['getTypedApi']> | null = null;
@@ -41,16 +44,17 @@ const HYDRATION_CHAINSPEC = JSON.stringify({
   },
 });
 
+providerModeChange$.subscribe(() => disconnectHydration());
+
 export async function getHydrationClient(network: NetworkType) {
   if (!hydrationClient) {
     updateConnectionStatus('hydration', 'connecting');
 
     try {
-      // Use shared smoldot manager to add Hydration parachain
-      const hydrationChain = await addParachain(HYDRATION_CHAINSPEC, network);
-
-      // Create client with smoldot provider
-      const provider = getSmProvider(hydrationChain);
+      const provider =
+        getProviderMode() === 'ws'
+          ? withPolkadotSdkCompat(getWsProvider(getChainEndpoint(network, 'HYDRATION')))
+          : getSmProvider(await addParachain(HYDRATION_CHAINSPEC, network));
       hydrationClient = createClient(provider);
 
       updateConnectionStatus('hydration', 'connected');

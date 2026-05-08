@@ -19,6 +19,7 @@ export function SubmitProposal({ proposal, onBack }: SubmitProposalProps) {
   const [status, setStatus] = useState<'idle' | 'connecting' | 'signing' | 'submitting' | 'success' | 'error'>('idle');
   const [error, setError] = useState<string | null>(null);
   const [referendumId] = useState<number | null>(null);
+  const isProcessing = status === 'connecting' || status === 'signing' || status === 'submitting';
 
   const handleSubmit = async () => {
     try {
@@ -142,39 +143,50 @@ export function SubmitProposal({ proposal, onBack }: SubmitProposalProps) {
             </div>
 
             <div className="flex justify-between py-3">
-              <span className="text-sm font-medium text-neutral-700">DOT Amount:</span>
+              <span className="text-sm font-medium text-neutral-700">Mode:</span>
               <span className="text-sm text-neutral-600">
-                {(Number(proposal.inputs.dotAmount) / 1e10).toLocaleString()} DOT
+                {proposal.inputs.mode}
               </span>
             </div>
 
-            <div className="flex justify-between py-3">
-              <span className="text-sm font-medium text-neutral-700">Target:</span>
-              <span className="text-sm text-neutral-600">
-                {proposal.inputs.stablecoin}
-              </span>
-            </div>
+            {proposal.inputs.mode !== 'return' && (
+              <>
+                <div className="flex justify-between py-3">
+                  <span className="text-sm font-medium text-neutral-700">DOT Amount:</span>
+                  <span className="text-sm text-neutral-600">
+                    {(Number(proposal.inputs.dotAmount ?? 0n) / 1e10).toLocaleString()} DOT
+                  </span>
+                </div>
 
-            <div className="flex justify-between py-3">
-              <span className="text-sm font-medium text-neutral-700">Duration:</span>
-              <span className="text-sm text-neutral-600">
-                {proposal.inputs.dcaDurationDays} days
-              </span>
-            </div>
+                <div className="flex justify-between py-3">
+                  <span className="text-sm font-medium text-neutral-700">Target:</span>
+                  <span className="text-sm text-neutral-600">HOLLAR</span>
+                </div>
 
-            <div className="flex justify-between py-3">
-              <span className="text-sm font-medium text-neutral-700">Total Trades:</span>
-              <span className="text-sm text-neutral-600">
-                {proposal.calculations.totalTrades}
-              </span>
-            </div>
+                <div className="flex justify-between py-3">
+                  <span className="text-sm font-medium text-neutral-700">Duration:</span>
+                  <span className="text-sm text-neutral-600">
+                    {proposal.inputs.dcaDurationDays} days
+                  </span>
+                </div>
 
-            <div className="flex justify-between py-3">
-              <span className="text-sm font-medium text-neutral-700">Returns:</span>
-              <span className="text-sm text-neutral-600">
-                {proposal.inputs.numberOfReturns}x every {proposal.inputs.returnFrequencyDays} days
-              </span>
-            </div>
+                <div className="flex justify-between py-3">
+                  <span className="text-sm font-medium text-neutral-700">Total Trades:</span>
+                  <span className="text-sm text-neutral-600">
+                    {proposal.calculations.totalTrades}
+                  </span>
+                </div>
+              </>
+            )}
+
+            {proposal.inputs.mode !== 'setup' && (
+              <div className="flex justify-between py-3">
+                <span className="text-sm font-medium text-neutral-700">Returns:</span>
+                <span className="text-sm text-neutral-600">
+                  {proposal.inputs.numberOfReturns}x every {proposal.inputs.returnFrequencyDays} days
+                </span>
+              </div>
+            )}
 
             <div className="flex justify-between py-3 last:pb-0">
               <span className="text-sm font-medium text-neutral-700">Chain:</span>
@@ -249,21 +261,13 @@ export function SubmitProposal({ proposal, onBack }: SubmitProposalProps) {
 
       {/* Action Buttons */}
       <div className="flex justify-between">
-        <Button
-          variant="outline"
-          onClick={onBack}
-          disabled={status === 'connecting' || status === 'signing' || status === 'submitting'}
-        >
+        <Button variant="outline" onClick={onBack} disabled={isProcessing}>
           Back to Preview
         </Button>
 
         {status !== 'success' && (
-          <Button
-            size="lg"
-            onClick={handleSubmit}
-            disabled={status === 'connecting' || status === 'signing' || status === 'submitting'}
-          >
-            {status === 'connecting' || status === 'signing' || status === 'submitting' ? (
+          <Button size="lg" onClick={handleSubmit} disabled={isProcessing}>
+            {isProcessing ? (
               <>
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                 Processing...
@@ -290,8 +294,8 @@ export function SubmitProposal({ proposal, onBack }: SubmitProposalProps) {
             <li>Monitoring events for referendum ID</li>
           </ul>
           <p className="mt-2">
-            The batch contains: immediate DOT transfer, scheduled DCA start, and scheduled periodic returns
-            — all executed via a single Collectives referendum.
+            The batch contents depend on the selected mode — transfer + DCA start, periodic returns,
+            or the full three-call flow — all executed via a single Collectives referendum.
           </p>
         </AlertDescription>
       </Alert>

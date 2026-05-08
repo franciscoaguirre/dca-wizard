@@ -1,37 +1,41 @@
 /**
  * DCA Setup Logic
- * Builds the DCA.schedule call that will be executed on Hydration
+ * Builds the DCA.schedule call that will be executed on Hydration.
+ * Target asset is HOLLAR (id 222 on Hydration, 18 decimals). Per Hydration core,
+ * the same Router call shape works with an empty route — no explicit hop list needed.
  */
 
-import type { NetworkType, StablecoinType } from '../api/constants';
+import type { NetworkType } from '../api/constants';
 import {
   getHydrationAssetId,
   DCA_CONFIG,
   TIMING,
 } from '../api/constants';
+import { Enum } from 'polkadot-api';
+import { XcmVersionedLocation } from '@polkadot-api/descriptors';
+import { getHydrationApi } from '../api/clients/hydration';
+import { fellowshipTreasuryPalletLocationV5 } from './xcm-messages';
 
 /**
- * DCA Order Type
- * Represents a swap from one asset to another
+ * DCA Order Type (Sell: exact amount in, minimum out)
  */
 export interface DcaOrder {
-  asset_in: number; // Asset ID to sell (DOT)
-  asset_out: number; // Asset ID to buy (USDT or USDC)
+  asset_in: number; // Asset ID to sell (DOT on Hydration)
+  asset_out: number; // Asset ID to buy (HOLLAR on Hydration)
   amount_in: bigint; // Amount per trade
   min_amount_out: bigint; // Minimum expected output (after slippage)
 }
 
 /**
- * DCA Schedule Parameters
- * These parameters are passed to the DCA.schedule call on Hydration
+ * DCA Schedule Parameters passed to DCA.schedule on Hydration.
  */
 export interface DcaScheduleParams {
-  owner: string; // Sovereign account SS58 address (Collectives parachain)
+  owner: string; // Sovereign account SS58 (Collectives Plurality on Hydration)
   period: number; // Blocks between trades
   total_amount: bigint; // 0 = continuous until depleted
-  max_retries: number; // Number of retry attempts
-  stability_threshold: number; // Price stability threshold (basis points)
-  slippage: number; // Maximum slippage (basis points)
+  max_retries: number;
+  stability_threshold: number; // Price stability threshold (per million)
+  slippage: number; // Max slippage (per million)
   order: DcaOrder;
 }
 
@@ -41,21 +45,26 @@ export interface DcaScheduleParams {
 export function calculateDcaParams(
   network: NetworkType,
   sovereignAccount: string,
-  stablecoin: 'USDT' | 'USDC',
   dcaFrequencyBlocks: number,
   slippagePercent: number,
   dotPerTrade: bigint,
   expectedOutputPerTrade: bigint
 ): DcaScheduleParams {
   const dotAssetId = getHydrationAssetId(network, 'DOT');
-  const stablecoinAssetId = getHydrationAssetId(network, stablecoin);
+  const hollarAssetId = getHydrationAssetId(network, 'HOLLAR');
 
   // Convert percentage to per million (1% = 10,000 per million)
   const slippagePerMillion = Math.floor(slippagePercent * 10_000);
   const stabilityPerMillion = DCA_CONFIG.STABILITY_THRESHOLD_PERCENT * 10_000;
 
-  // Calculate min_amount_out with slippage protection
-  const minAmountOut = (expectedOutputPerTrade * BigInt(100 - Math.floor(slippagePercent))) / 100n;
+  // `min_amount_out` is the absolute per-trade floor. The per-trade AMM slippage
+  // is enforced separately via the `slippage` field below, so this floor only
+  // needs to tolerate price drift over the schedule's lifetime. Apply a fixed
+  // PRICE_DECLINE_BUFFER_PERCENT discount against the proposal-time price.
+  const minAmountOut =
+    (expectedOutputPerTrade *
+      BigInt(100 - DCA_CONFIG.PRICE_DECLINE_BUFFER_PERCENT)) /
+    100n;
 
   return {
     owner: sovereignAccount,
@@ -66,7 +75,7 @@ export function calculateDcaParams(
     slippage: slippagePerMillion,
     order: {
       asset_in: dotAssetId,
-      asset_out: stablecoinAssetId,
+      asset_out: hollarAssetId,
       amount_in: dotPerTrade,
       min_amount_out: minAmountOut,
     },
@@ -74,23 +83,17 @@ export function calculateDcaParams(
 }
 
 /**
- * Encode DCA.schedule call
- * Uses the Hydration chain's TypedApi from polkadot-api
+ * Encode DCA.schedule call via Hydration's PAPI.
  */
 export async function encodeDcaScheduleCall(
   network: NetworkType,
   params: DcaScheduleParams
 ) {
-  const { getHydrationApi } = await import('../api/clients/hydration');
-  const { Enum } = await import('polkadot-api');
-
-  // Get the typed API (will connect to chain via smoldot)
   const hydrationApi = await getHydrationApi(network);
 
-  // Create the DCA.schedule call
   const dcaCall = hydrationApi.tx.DCA.schedule({
     schedule: {
-      owner: params.owner, // SS58 string
+      owner: params.owner,
       period: params.period,
       total_amount: params.total_amount,
       max_retries: params.max_retries,
@@ -107,7 +110,6 @@ export async function encodeDcaScheduleCall(
     start_execution_block: undefined,
   });
 
-  // Get the encoded call data
   return await dcaCall.getEncodedData();
 }
 
@@ -134,107 +136,49 @@ export function calculateDotPerTrade(
 }
 
 /**
- * Estimate stablecoin output per trade
- * Requires price feed - for now returns estimate based on provided price
+ * Estimate HOLLAR output for a given DOT amount and DOT price in USD.
+ * HOLLAR is USD-pegged, so 1 HOLLAR ≈ 1 USD.
+ *
+ * Bigint throughout: floats lose precision when scaled to 18 decimals beyond ~2^53.
+ * Price kept as a fixed-point micro-USD value:
+ *
+ *   hollar18 = (dot_planck / 10^10) * (priceMicroUsd / 10^6) * 10^18
+ *            = (dot_planck * priceMicroUsd) * 10^2
  */
-export function estimateStablecoinPerTrade(
-  dotPerTrade: bigint,
-  dotPriceInUsd: number,
-  stablecoinDecimals: number = 6
+export function estimateHollarFromDot(
+  dotAmountPlanck: bigint,
+  dotPriceInUsd: number
 ): bigint {
-  // DOT has 10 decimals, stablecoins typically have 6
-  const dotInFloat = Number(dotPerTrade) / 1e10;
-  const usdValue = dotInFloat * dotPriceInUsd;
-  return BigInt(Math.floor(usdValue * 10 ** stablecoinDecimals));
+  const dotPriceMicroUsd = BigInt(Math.floor(dotPriceInUsd * 1e6));
+  return dotAmountPlanck * dotPriceMicroUsd * 100n;
 }
 
-/**
- * Build DCA setup calls for the governance proposal
- * Returns an array of DCA schedule calls (one or two, depending on stablecoin selection)
- */
-export function buildDcaScheduleCalls(
-  network: NetworkType,
-  sovereignAccount: string,
-  stablecoin: StablecoinType,
-  dcaFrequencyBlocks: number,
-  slippagePercent: number,
-  dotPerTrade: bigint,
-  expectedOutputPerTrade: bigint
-): Array<{ stablecoin: 'USDT' | 'USDC'; params: DcaScheduleParams }> {
-  const calls: Array<{ stablecoin: 'USDT' | 'USDC'; params: DcaScheduleParams }> = [];
-
-  // When BOTH stablecoins are selected, split the amounts
-  const dotPerTradePerCoin = stablecoin === 'BOTH' ? dotPerTrade / 2n : dotPerTrade;
-  const expectedOutputPerCoin = stablecoin === 'BOTH' ? expectedOutputPerTrade / 2n : expectedOutputPerTrade;
-
-  if (stablecoin === 'USDT' || stablecoin === 'BOTH') {
-    calls.push({
-      stablecoin: 'USDT',
-      params: calculateDcaParams(
-        network,
-        sovereignAccount,
-        'USDT',
-        dcaFrequencyBlocks,
-        slippagePercent,
-        dotPerTradePerCoin,
-        expectedOutputPerCoin
-      ),
-    });
-  }
-
-  if (stablecoin === 'USDC' || stablecoin === 'BOTH') {
-    calls.push({
-      stablecoin: 'USDC',
-      params: calculateDcaParams(
-        network,
-        sovereignAccount,
-        'USDC',
-        dcaFrequencyBlocks,
-        slippagePercent,
-        dotPerTradePerCoin,
-        expectedOutputPerCoin
-      ),
-    });
-  }
-
-  return calls;
-}
+const sovereignCache = new Map<NetworkType, string>();
 
 /**
- * Get sovereign account address for a parachain on Hydration
- * Uses Hydration's LocationToAccountApi runtime API for accurate conversion
+ * Resolve the Hydration AccountId for the Fellowship Treasury pallet sovereign.
+ *
+ * The combined V5 setup XCM enters Hydration via Asset Hub. `InitiateTransfer
+ * { preserve_origin: true }` pushes `AliasOrigin((1,[Parachain(collectives),
+ * PalletInstance(FELLOWSHIP_TREASURY_PALLET_INDEX)]))`, accepted by Hydration's
+ * `AliasOriginRootUsingFilter<AssetHubLocation, RestrictedAssetHubAliases>`
+ * (post-d026a6748: descendants of any system parachain). The Transact signs as
+ * the SS58 derivation of that location via Hydration's `LocationToAccountId`.
  */
-export async function getSovereignAccount(
+export async function getFellowshipTreasurySovereignOnHydration(
   network: NetworkType,
-  parachainId: number
 ): Promise<string> {
-  const { getHydrationApi } = await import('../api/clients/hydration');
-  const { HydrationXcmVersionedLocation, XcmV3Junctions, XcmV3Junction, XcmV3JunctionBodyId, XcmV2JunctionBodyPart } = await import('@polkadot-api/descriptors');
+  const cached = sovereignCache.get(network);
+  if (cached) return cached;
 
   const hydrationApi = await getHydrationApi(network);
-
-  // Build the versioned XCM location for the Plurality sovereign (from Hydration's perspective)
-  // When PolkadotXcm.send() is called with Architects origin, the pallet prepends
-  // DescendOrigin(Plurality(Treasury, Voice)). On Hydration this means the origin is
-  // (1, [Parachain(collectivesParaId), Plurality(Treasury, Voice)]) — a different
-  // account from the plain parachain sovereign. All DOT/stables must be deposited here.
-  const location = HydrationXcmVersionedLocation.V4({
-    parents: 1,
-    interior: XcmV3Junctions.X2([
-      XcmV3Junction.Parachain(parachainId),
-      XcmV3Junction.Plurality({
-        id: XcmV3JunctionBodyId.Treasury(),
-        part: XcmV2JunctionBodyPart.Voice(),
-      }),
-    ]),
-  });
-
-  // Use Hydration's runtime API to convert location to account
+  const location = XcmVersionedLocation.V5(fellowshipTreasuryPalletLocationV5(network));
   const result = await hydrationApi.apis.LocationToAccountApi.convert_location(location);
 
   if (result.success === false || result.value === undefined) {
-    throw new Error(`Failed to convert location to account for parachain ${parachainId}`);
+    throw new Error('Failed to convert Fellowship Treasury pallet location to Hydration account');
   }
 
+  sovereignCache.set(network, result.value);
   return result.value;
 }

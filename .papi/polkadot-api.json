@@ -6,19 +6,19 @@
       "chain": "polkadot_asset_hub",
       "metadata": ".papi/metadata/dotAh.scale",
       "genesis": "0x68d56f15f85d3136970ec16946040bc1752654e906147f7e43e9d539d7c3de2f",
-      "codeHash": "0xd4cd182f3ea1a30ad6527a088dbd1ebd7381d7c85b675cc8c29f82e695f73fbd"
+      "codeHash": "0x04fa38c2fb117fbd73302c23b339ef18c4f3a200a0b487803208bf279161f1d7"
     },
     "hydration": {
       "wsUrl": "wss://rpc.helikon.io/hydradx",
       "metadata": ".papi/metadata/hydration.scale",
       "genesis": "0xafdc188f45c71dacbaa0b62e16a91f726c7b8699a9748cdf715459de6b7f366d",
-      "codeHash": "0x4d8adba8e30c8b20b517255711be01709e48f60fc11e2ebd0f2f5ee554f5df0c"
+      "codeHash": "0x27eb1c24efe3504a9a53c2e15f1da22c00a12b7c8ea3ee45962d7818071ca34d"
     },
     "collectives": {
-      "wsUrl": "ws://localhost:8003",
+      "chain": "polkadot_collectives",
       "metadata": ".papi/metadata/collectives.scale",
       "genesis": "0x46ee89aa2eedd13e988962630ec9fb7565964cf5023bb351f2b6b25c1b68b0b2",
-      "codeHash": "0x76e4c3e4a4fd500a1810c1b80b3854c94bc4866e6c258a71805704edd61dc925"
+      "codeHash": "0x611713c36ff5ac5919ae59e0055a81b09bc3f45333dacc52406a56ec82744a75"
     }
   }
 }

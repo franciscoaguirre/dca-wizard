@@ -1,11 +1,17 @@
 # Chopsticks configuration for Polkadot Collectives
 # Start with: npx @acala-network/chopsticks@latest --config test/chopsticks/collectives.yml
 
-endpoint: wss://polkadot-collectives-rpc.polkadot.io
+endpoint:
+- wss://polkadot-collectives-rpc.polkadot.io
+- wss://collectives-polkadot-rpc.n.dwellir.com
+- wss://sys.ibp.network/collectives-polkadot
+- wss://collectives-polkadot.dotters.network
+- wss://rpc-collectives-polkadot.luckyfriday.io
+- wss://collectives.api.onfinality.io/public-ws
+- wss://dot-rpc.stakeworld.io/collectives
 mock-signature-host: true
 db: ./test/chopsticks/db/collectives.db
 port: 8003
-wasm-override: ../../fellowship/runtimes/collectives_polkadot.wasm
 
 import-storage:
   System:

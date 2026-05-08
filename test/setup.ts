@@ -113,12 +113,12 @@ export async function advanceAllBlocks(
 ) {
   console.log(`Advancing ${count} blocks on all networks...`);
 
+  // Advance sequentially to avoid heartbeat timeouts in Chopsticks XCM mode
+  // (all chains share one process, so parallel block builds block other WS servers)
   for (let i = 0; i < count; i++) {
-    await Promise.all([
-      clients.ahClient._request("dev_newBlock", [{ count: 1 }]),
-      clients.hydrationClient._request("dev_newBlock", [{ count: 1 }]),
-      clients.collectivesClient._request("dev_newBlock", [{ count: 1 }]),
-    ]);
+    await clients.ahClient._request("dev_newBlock", [{ count: 1 }]);
+    await clients.hydrationClient._request("dev_newBlock", [{ count: 1 }]);
+    await clients.collectivesClient._request("dev_newBlock", [{ count: 1 }]);
   }
 
   console.log(`Advanced ${count} blocks on all networks`);

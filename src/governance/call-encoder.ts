@@ -1,45 +1,14 @@
 /**
  * Call Encoder Utilities
- * Helpers for encoding and displaying the single batched proposal
+ * Helpers for encoding and displaying the batched proposal.
+ * Batch contents vary by ProposalMode (setup / return / both).
  */
 
 import type { DcaProposal } from './builder';
 
 /**
- * Format call data for display
- */
-export function formatCallData(data: Uint8Array): string {
-  return `0x${Array.from(data)
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('')}`;
-}
-
-/**
- * Calculate call size in bytes
- */
-export function getCallSize(data: Uint8Array): number {
-  return data.length;
-}
-
-/**
- * Check if call needs preimage
- * Calls larger than 10KB should be stored as preimage
- */
-export function needsPreimage(data: Uint8Array): boolean {
-  return data.length > 10 * 1024;
-}
-
-/**
- * Generate call hash (blake2_256)
- */
-export async function generateCallHash(data: Uint8Array): Promise<string> {
-  const { blake2b } = await import('@noble/hashes/blake2.js');
-  const hash = blake2b(data, { dkLen: 32 });
-  return formatCallData(hash);
-}
-
-/**
- * Get transaction breakdown for the single batched proposal
+ * Get transaction breakdown for the batched proposal.
+ * Returns only the calls that are actually included for the current mode.
  */
 export function getTransactionBreakdown(
   proposal: DcaProposal
@@ -53,33 +22,37 @@ export function getTransactionBreakdown(
   }>;
   totalCalls: number;
 } {
-  const dotAmountDisplay = Number(proposal.inputs.dotAmount) / 1e10;
-  const stablecoin = proposal.inputs.stablecoin;
   const { inputs } = proposal;
+  const mode = inputs.mode;
+  const dotAmountDisplay = Number(inputs.dotAmount ?? 0n) / 1e10;
 
-  const calls = [
-    {
-      name: 'Transfer DOT',
+  const calls: Array<{
+    name: string;
+    description: string;
+    pallet: string;
+    call: string;
+    timing: string;
+  }> = [];
+
+  if (mode !== 'return') {
+    calls.push({
+      name: 'Setup DCA',
       pallet: 'PolkadotXcm',
       call: 'send → Asset Hub',
-      description: `Send ${dotAmountDisplay} DOT from Fellowship Treasury to Hydration (Plurality sovereign)`,
+      description: `Single V5 XCM: transfer ${dotAmountDisplay} DOT from Fellowship Treasury to its Hydration sovereign and start the DCA schedule (DOT → HOLLAR) in one inbound message`,
       timing: 'Immediate',
-    },
-    {
-      name: `Start DCA (${stablecoin})`,
-      pallet: 'Scheduler → PolkadotXcm',
-      call: 'schedule_after → send → Hydration',
-      description: `Start DCA trading DOT → ${stablecoin} on Hydration after warmup (~${Math.round((100 * 6) / 60)} min)`,
-      timing: `After 100 blocks`,
-    },
-    {
+    });
+  }
+
+  if (mode !== 'setup') {
+    calls.push({
       name: 'Periodic Returns',
       pallet: 'Scheduler → PolkadotXcm',
-      call: 'schedule_after(periodic) → send → Hydration',
-      description: `Return ${stablecoin} to Fellowship Treasury (${inputs.treasurySplitPercent}%) / Salary (${inputs.salarySplitPercent}%) every ${inputs.returnFrequencyDays} days, ${inputs.numberOfReturns} times`,
-      timing: `Every ${inputs.returnFrequencyDays} days`,
-    },
-  ];
+      call: 'schedule_after(periodic) → send → Asset Hub',
+      description: `XCM (AH → Hydration → AH) returning HOLLAR to Fellowship Treasury (${inputs.treasurySplitPercent ?? 0}%) / Salary (${inputs.salarySplitPercent ?? 0}%) every ${inputs.returnFrequencyDays ?? 0} days, ${inputs.numberOfReturns ?? 0} times`,
+      timing: `Every ${inputs.returnFrequencyDays ?? 0} days`,
+    });
+  }
 
   return {
     calls,
@@ -88,7 +61,7 @@ export function getTransactionBreakdown(
 }
 
 /**
- * Encode the single batched proposal
+ * Encode the batched proposal
  */
 export async function encodeProposal(
   proposal: DcaProposal,

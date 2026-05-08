@@ -24,8 +24,7 @@ export {
 
 // Unit values for convenience
 export const DOT_UNITS = 10_000_000_000n; // 10 decimals
-export const USDT_UNITS = 1_000_000n; // 6 decimals
-export const USDC_UNITS = 1_000_000n; // 6 decimals
+export const HOLLAR_UNITS = 10n ** 18n; // 18 decimals
 
 // Test-specific parameters
 export const TEST_DOT_AMOUNT = 10_000n * DOT_UNITS; // 10,000 DOT for testing

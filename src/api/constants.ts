@@ -6,6 +6,12 @@
 // Network Type
 export type NetworkType = 'polkadot' | 'paseo';
 
+// Proposal Mode: which subset of calls the wizard emits.
+// - setup:  single combined V5 XCM (transfer DOT + start DCA in one Hydration entry)  (1 call)
+// - return: scheduled periodic-return XCM only                                         (1 call)
+// - both:   setup + scheduled periodic returns wrapped in Utility.batch_all            (2 calls)
+export type ProposalMode = 'setup' | 'return' | 'both';
+
 // Account Addresses
 export const ACCOUNTS = {
   FELLOWSHIP_TREASURY: '16VcQSRcMFy6ZHVjBvosKmo7FKqTb8ZATChDYo8ibutzLnos',
@@ -31,16 +37,16 @@ export const PARACHAIN_IDS = {
 } as const;
 
 // Asset IDs on Asset Hub
+// HOLLAR is a foreign asset referenced by its multilocation
+// (parents=1, X2(Parachain(2034), GeneralIndex(222))), not by a local numeric id.
+// We keep the Hydration-side asset id here for completeness since the Asset Hub
+// representation is constructed directly from Hydration's location.
 export const ASSET_HUB_ASSETS = {
   polkadot: {
     DOT: 'native', // Native asset
-    USDT: 1984,
-    USDC: 1337,
   },
   paseo: {
     DOT: 'native',
-    USDT: 0, // TODO: Look up actual testnet asset ID
-    USDC: 0, // TODO: Look up actual testnet asset ID
   },
 } as const;
 
@@ -48,28 +54,24 @@ export const ASSET_HUB_ASSETS = {
 export const HYDRATION_ASSETS = {
   polkadot: {
     DOT: 5,
-    USDT: 10,
-    USDC: 22,
+    HOLLAR: 222,
   },
   paseo: {
     DOT: 0, // TODO: Look up actual testnet asset ID
-    USDT: 0, // TODO: Look up actual testnet asset ID
-    USDC: 0, // TODO: Look up actual testnet asset ID
+    HOLLAR: 0, // TODO: Confirm Paseo Hydration HOLLAR asset id
   },
 } as const;
 
 // Asset Decimals
 export const DECIMALS = {
   DOT: 10,
-  USDT: 6,
-  USDC: 6,
+  HOLLAR: 18,
 } as const;
 
 // Timing Constants
 export const TIMING = {
   BLOCK_TIME_SECONDS: 6,
   BLOCKS_PER_DAY: 14400, // 24 * 60 * 60 / 6
-  WARM_UP_BLOCKS: 100, // ~10 minutes for DOT to arrive on Hydration
 } as const;
 
 // Default Values
@@ -78,10 +80,17 @@ export const DEFAULTS = {
   DCA_DURATION_DAYS: 30,
   SLIPPAGE_PERCENT: 1,
   TREASURY_SPLIT_PERCENT: 70,
-  FEE_BUFFER_PERCENT: 10, // Extra DOT reserved for multi-hop fees
+  FEE_BUFFER_PERCENT: 10,
   RETURN_FREQUENCY_DAYS: 7,
-  NUMBER_OF_RETURNS: 4, // default: 4 returns over 30 days
+  NUMBER_OF_RETURNS: 4,
+  // Margin shaved off each rate-based return amount to absorb DCA price drift,
+  // execution slippage, and timing skew between trade settlement and return.
+  RETURN_BUFFER_PERCENT: 5,
 } as const;
+
+// Conservative per-hop XCM fee budget on Asset Hub / Hydration (10 decimals → 0.05 DOT).
+// Embedded in PayFees / WithdrawAsset on each hop and used for proposal-level estimates.
+export const PER_HOP_FEE_PLANCK = BigInt(5e8);
 
 // DCA Parameters
 export const DCA_CONFIG = {
@@ -89,6 +98,10 @@ export const DCA_CONFIG = {
   STABILITY_THRESHOLD_PERCENT: 2,
   MIN_SLIPPAGE_PERCENT: 0.1,
   MAX_SLIPPAGE_PERCENT: 10,
+  // Headroom on `min_amount_out` to tolerate DOT price decline over the schedule's
+  // lifetime. Per-trade execution slippage is still enforced via the `slippage`
+  // field; this buffer is the absolute floor against the proposal-time price.
+  PRICE_DECLINE_BUFFER_PERCENT: 50,
 } as const;
 
 // Validation Limits
@@ -115,20 +128,17 @@ export const CHAIN_ENDPOINTS = {
   },
 } as const;
 
-// Stablecoin Options
-export type StablecoinType = 'USDT' | 'USDC' | 'BOTH';
-
 // Helper function to get asset ID by network and chain
 export function getAssetHubAssetId(
   network: NetworkType,
-  asset: 'DOT' | 'USDT' | 'USDC'
+  asset: 'DOT'
 ): number | 'native' {
   return ASSET_HUB_ASSETS[network][asset];
 }
 
 export function getHydrationAssetId(
   network: NetworkType,
-  asset: 'DOT' | 'USDT' | 'USDC'
+  asset: 'DOT' | 'HOLLAR'
 ): number {
   return HYDRATION_ASSETS[network][asset];
 }
@@ -165,13 +175,12 @@ export function formatDotAmount(amount: bigint): string {
   return `${whole}.${fraction.toString().padStart(DECIMALS.DOT, '0')} DOT`;
 }
 
-// Format stablecoin amount with proper decimals
-export function formatStablecoinAmount(amount: bigint, coin: 'USDT' | 'USDC'): string {
-  const decimals = DECIMALS[coin];
-  const divisor = BigInt(10 ** decimals);
+// Format HOLLAR amount with proper decimals (18)
+export function formatHollarAmount(amount: bigint): string {
+  const divisor = 10n ** BigInt(DECIMALS.HOLLAR);
   const whole = amount / divisor;
   const fraction = amount % divisor;
-  return `${whole}.${fraction.toString().padStart(decimals, '0')} ${coin}`;
+  return `${whole}.${fraction.toString().padStart(DECIMALS.HOLLAR, '0')} HOLLAR`;
 }
 
 // Parse DOT amount from string
@@ -179,4 +188,11 @@ export function parseDotAmount(amount: string): bigint {
   const [whole = '0', fraction = '0'] = amount.split('.');
   const paddedFraction = fraction.padEnd(DECIMALS.DOT, '0').slice(0, DECIMALS.DOT);
   return BigInt(whole) * BigInt(10 ** DECIMALS.DOT) + BigInt(paddedFraction);
+}
+
+// Parse HOLLAR amount from string (18 decimals; pure bigint path for precision)
+export function parseHollarAmount(amount: string): bigint {
+  const [whole = '0', fraction = '0'] = amount.split('.');
+  const paddedFraction = fraction.padEnd(DECIMALS.HOLLAR, '0').slice(0, DECIMALS.HOLLAR);
+  return BigInt(whole) * 10n ** BigInt(DECIMALS.HOLLAR) + BigInt(paddedFraction);
 }

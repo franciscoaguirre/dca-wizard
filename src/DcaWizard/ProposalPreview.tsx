@@ -1,15 +1,25 @@
 /**
  * Proposal Preview Component
- * Shows the single batched proposal with breakdown of operations
+ * Shows the batched proposal breakdown; contents adapt to the ProposalMode.
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import type { DcaProposal } from '../governance/builder';
+import type { ProposalMode } from '../api/constants';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Alert, AlertDescription, AlertTitle } from '../components/ui/alert';
 import { ArrowRight, AlertTriangle, Info, Code2, Copy, Check } from 'lucide-react';
 import { encodeProposal, getTransactionBreakdown } from '../governance/call-encoder';
+
+const MODE_DESCRIPTIONS: Record<ProposalMode, string> = {
+  setup:
+    'A single V5 XCM transfers DOT from the Fellowship Treasury to its Hydration sovereign and starts a DCA schedule that converts DOT into HOLLAR over time. Accumulated HOLLAR remains on the Fellowship Treasury sovereign on Hydration.',
+  return:
+    'This proposal schedules periodic returns of HOLLAR from the Fellowship Treasury sovereign on Hydration back to Fellowship Treasury and Salary on Asset Hub via an XCM hop (AH → Hydration → AH).',
+  both:
+    'A combined setup XCM and a scheduled periodic-return XCM, batched into one proposal. DCA accumulates HOLLAR on the Fellowship Treasury sovereign on Hydration, then periodic returns split it between Treasury and Salary on Asset Hub.',
+};
 
 interface ProposalPreviewProps {
   proposal: DcaProposal;
@@ -18,26 +28,40 @@ interface ProposalPreviewProps {
   onNext: () => void;
 }
 
+function formatHollarDisplay(amount18: bigint): string {
+  // Approximate two decimals: divide by 10^16 for centi-HOLLAR, show with .XX
+  const centi = amount18 / 10n ** 16n;
+  const whole = centi / 100n;
+  const frac = (centi % 100n).toString().padStart(2, '0');
+  return `${whole.toLocaleString()}.${frac}`;
+}
+
 export function ProposalPreview({ proposal, dotPriceUsd, onBack, onNext }: ProposalPreviewProps) {
   const { inputs, calculations } = proposal;
+  const mode = inputs.mode;
+  const showSetup = mode !== 'return';
+  const showReturn = mode !== 'setup';
   const [copied, setCopied] = useState(false);
   const [encoded, setEncoded] = useState<string | null>(null);
   const [encodingError, setEncodingError] = useState<string | null>(null);
   const [isEncoding, setIsEncoding] = useState(false);
 
-  const breakdown = getTransactionBreakdown(proposal);
+  const breakdown = useMemo(() => getTransactionBreakdown(proposal), [proposal]);
 
-  // Encode the batched proposal
   useEffect(() => {
-    (async () => {
-      setIsEncoding(true);
-      setEncoded(null);
-      setEncodingError(null);
-      const result = await encodeProposal(proposal, dotPriceUsd);
+    let cancelled = false;
+    setIsEncoding(true);
+    setEncoded(null);
+    setEncodingError(null);
+    encodeProposal(proposal, dotPriceUsd).then((result) => {
+      if (cancelled) return;
       setEncoded(result.encoded);
       setEncodingError(result.error);
       setIsEncoding(false);
-    })();
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [proposal, dotPriceUsd]);
 
   const handleCopyEncoded = () => {
@@ -72,101 +96,99 @@ export function ProposalPreview({ proposal, dotPriceUsd, onBack, onNext }: Propo
         </CardHeader>
         <CardContent>
           <div className="space-y-6">
-            {/* Converting section */}
-            <div className="pb-4 border-b border-neutral-200">
-              <p className="text-sm text-neutral-500 mb-1">Converting</p>
-              <p className="text-xl font-semibold text-neutral-800">
-                {(Number(inputs?.dotAmount ?? 0n) / 1e10).toLocaleString()} DOT
-                <span className="text-neutral-400 mx-2">&rarr;</span>
-                <span className="text-success-600">
-                  ~${(
-                    (Number(calculations?.estimatedUsdtTotal ?? 0n) +
-                      Number(calculations?.estimatedUsdcTotal ?? 0n)) /
-                    1e6
-                  ).toLocaleString()}{' '}
-                  {inputs?.stablecoin ?? 'USDT'}
-                </span>
-              </p>
-            </div>
+            {/* Converting section (setup / both) */}
+            {showSetup && (
+              <div className="pb-4 border-b border-neutral-200">
+                <p className="text-sm text-neutral-500 mb-1">Converting</p>
+                <p className="text-xl font-semibold text-neutral-800">
+                  {(Number(inputs.dotAmount ?? 0n) / 1e10).toLocaleString()} DOT
+                  <span className="text-neutral-400 mx-2">&rarr;</span>
+                  <span className="text-success-600">
+                    ~{formatHollarDisplay(calculations?.estimatedHollarTotal ?? 0n)} HOLLAR
+                  </span>
+                </p>
+              </div>
+            )}
 
-            {/* DCA Strategy, Returns & Split in columns */}
-            <div className="grid grid-cols-2 lg:grid-cols-3 gap-6">
-              {/* DCA Strategy */}
-              <div className="space-y-3">
-                <h4 className="text-sm font-semibold text-neutral-700">DCA Strategy</h4>
-                <div className="space-y-2 text-sm">
-                  <div className="flex justify-between">
-                    <span className="text-neutral-500">Total Trades</span>
-                    <span className="text-neutral-800 font-medium">
-                      {calculations?.totalTrades?.toLocaleString() ?? '---'}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-neutral-500">DOT per trade</span>
-                    <span className="text-neutral-800 font-medium">
-                      ~{(Number(calculations?.dotPerTrade ?? 0n) / 1e10).toFixed(2)}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-neutral-500">Duration</span>
-                    <span className="text-neutral-800 font-medium">
-                      {inputs?.dcaDurationDays ?? 0} days
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-neutral-500">Slippage</span>
-                    <span className="text-neutral-800 font-medium">
-                      {inputs?.slippagePercent ?? 0}%
-                    </span>
+            {/* Summary columns */}
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {showSetup && (
+                <div className="space-y-3">
+                  <h4 className="text-sm font-semibold text-neutral-700">DCA Strategy</h4>
+                  <div className="space-y-2 text-sm">
+                    <div className="flex justify-between">
+                      <span className="text-neutral-500">Total Trades</span>
+                      <span className="text-neutral-800 font-medium">
+                        {calculations?.totalTrades?.toLocaleString() ?? '---'}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-neutral-500">DOT per trade</span>
+                      <span className="text-neutral-800 font-medium">
+                        ~{(Number(calculations?.dotPerTrade ?? 0n) / 1e10).toFixed(2)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-neutral-500">Duration</span>
+                      <span className="text-neutral-800 font-medium">
+                        {inputs.dcaDurationDays ?? 0} days
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-neutral-500">Slippage</span>
+                      <span className="text-neutral-800 font-medium">
+                        {inputs.slippagePercent ?? 0}%
+                      </span>
+                    </div>
                   </div>
                 </div>
-              </div>
+              )}
 
-              {/* Periodic Returns */}
-              <div className="space-y-3">
-                <h4 className="text-sm font-semibold text-neutral-700">Periodic Returns</h4>
-                <div className="space-y-2 text-sm">
-                  <div className="flex justify-between">
-                    <span className="text-neutral-500">Frequency</span>
-                    <span className="text-neutral-800 font-medium">
-                      Every {inputs?.returnFrequencyDays ?? 7} days
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-neutral-500">Returns</span>
-                    <span className="text-neutral-800 font-medium">
-                      {inputs?.numberOfReturns ?? 4}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-neutral-500">Per return</span>
-                    <span className="text-neutral-800 font-medium">
-                      ~${(
-                        (Number(calculations?.estimatedUsdtPerReturn ?? 0n) +
-                          Number(calculations?.estimatedUsdcPerReturn ?? 0n)) /
-                        1e6
-                      ).toLocaleString()}
-                    </span>
+              {showReturn && (
+                <div className="space-y-3">
+                  <h4 className="text-sm font-semibold text-neutral-700">Periodic Returns</h4>
+                  <div className="space-y-2 text-sm">
+                    <div className="flex justify-between">
+                      <span className="text-neutral-500">Frequency</span>
+                      <span className="text-neutral-800 font-medium">
+                        Every {inputs.returnFrequencyDays ?? 7} days
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-neutral-500">Returns</span>
+                      <span className="text-neutral-800 font-medium">
+                        {inputs.numberOfReturns ?? 0}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-neutral-500">Per return</span>
+                      <span className="text-neutral-800 font-medium">
+                        ~{formatHollarDisplay(calculations?.estimatedHollarPerReturn ?? 0n)} HOLLAR
+                      </span>
+                    </div>
                   </div>
                 </div>
-              </div>
+              )}
 
-              {/* Split & Governance */}
               <div className="space-y-3">
                 <h4 className="text-sm font-semibold text-neutral-700">Distribution</h4>
                 <div className="space-y-2 text-sm">
-                  <div className="flex justify-between">
-                    <span className="text-neutral-500">Fellowship Treasury</span>
-                    <span className="text-neutral-800 font-medium">
-                      {inputs?.treasurySplitPercent ?? 0}%
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-neutral-500">Fellowship Salary</span>
-                    <span className="text-neutral-800 font-medium">
-                      {inputs?.salarySplitPercent ?? 0}%
-                    </span>
-                  </div>
+                  {showReturn && (
+                    <>
+                      <div className="flex justify-between">
+                        <span className="text-neutral-500">Fellowship Treasury</span>
+                        <span className="text-neutral-800 font-medium">
+                          {inputs.treasurySplitPercent ?? 0}%
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-neutral-500">Fellowship Salary</span>
+                        <span className="text-neutral-800 font-medium">
+                          {inputs.salarySplitPercent ?? 0}%
+                        </span>
+                      </div>
+                    </>
+                  )}
                   <div className="flex justify-between">
                     <span className="text-neutral-500">Governance</span>
                     <span className="text-neutral-800 font-medium">Architects track</span>
@@ -184,15 +206,18 @@ export function ProposalPreview({ proposal, dotPriceUsd, onBack, onNext }: Propo
         </CardContent>
       </Card>
 
-      {/* Batched Operations Breakdown */}
+      {/* Operations Breakdown */}
       <Card>
         <CardHeader className="pb-2">
-          <CardTitle>Single Batched Proposal</CardTitle>
+          <CardTitle>
+            {breakdown.totalCalls === 1 ? 'Proposal Call' : `Batched Proposal (${breakdown.totalCalls} calls)`}
+          </CardTitle>
         </CardHeader>
         <CardContent>
           <p className="text-sm text-neutral-600 mb-4">
-            All operations are batched into a single Utility.batch_all call on the Collectives chain.
-            The Scheduler handles delayed and periodic execution.
+            {breakdown.totalCalls === 1
+              ? 'A single root call submitted on the Collectives chain. The Scheduler handles periodic execution where applicable.'
+              : 'Operations are wrapped in a Utility.batch_all call on the Collectives chain. The Scheduler handles periodic execution of the return cycle.'}
           </p>
           <div className="space-y-3">
             {breakdown.calls.map((call, idx) => (
@@ -277,15 +302,10 @@ export function ProposalPreview({ proposal, dotPriceUsd, onBack, onNext }: Propo
         </CardContent>
       </Card>
 
-      {/* Info Note */}
       <Alert variant="info">
         <Info className="h-4 w-4" />
         <AlertTitle>How It Works</AlertTitle>
-        <AlertDescription>
-          This single proposal executes on the Collectives chain via the Architects track.
-          When approved, the batch executes immediately to transfer DOT, then the Scheduler
-          handles the DCA start (after warmup) and periodic stablecoin returns automatically.
-        </AlertDescription>
+        <AlertDescription>{MODE_DESCRIPTIONS[mode]}</AlertDescription>
       </Alert>
 
       {/* Action Buttons */}

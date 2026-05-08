@@ -30,7 +30,7 @@ import {
 import {
   waitForDcaScheduleId,
   monitorDcaExecution,
-  printHydrationBalances,
+  printBalanceSnapshot,
   printTestSummary,
   monitorSchedulerEvents,
   monitorCollectivesSchedulerEvents,
@@ -109,6 +109,9 @@ async function main() {
     await fundAliceAccount(clients);
     await fundTreasuryAccount(clients, TREASURY_FUND_AMOUNT);
 
+    // Print initial balances
+    await printBalanceSnapshot(clients, "Initial Balances (after funding)");
+
     // If no call provided, just test connectivity and exit
     if (!callHex) {
       console.log("\n[Info] No call provided. Testing connectivity only.\n");
@@ -148,21 +151,19 @@ async function main() {
     const schedulerEvents = await monitorSchedulerEvents(clients, 5);
     console.log(`Found ${schedulerEvents.length} scheduler events on Asset Hub`);
 
-    // Step 7: Wait for warm-up period and trigger DCA start
-    console.log("\n[Step 7] Waiting for warm-up period...\n");
-    // The DCA start is scheduled after WARM_UP_BLOCKS on Collectives
-    // Advance Collectives blocks to trigger the scheduled DCA send
+    await printBalanceSnapshot(clients, "After XCM propagation (Step 6)");
+
+    // Step 7: Settle blocks (combined V5 setup XCM does the DCA.schedule Transact in
+    // the same inbound message as the DOT deposit — no separate warmup hop, but we
+    // still advance to let any follow-on settlement complete).
+    console.log("\n[Step 7] Settling blocks...\n");
     await advanceCollectivesBlocks(clients, 100);
-    // Then advance all chains to propagate the DCA XCM to Hydration
     await advanceAllBlocks(clients, 5);
 
-    // Step 8: Check Hydration balances
-    console.log("\n[Step 8] Checking Hydration balances...\n");
-
-    // The Plurality sovereign account on Hydration receives the DOT
-    // We can check using the treasury sovereign address
+    // Step 8: Check balances after settlement
+    console.log("\n[Step 8] Checking balances after settlement...\n");
     const treasurySovAccount = ACCOUNTS.FELLOWSHIP_TREASURY;
-    await printHydrationBalances(clients, treasurySovAccount, "Fellowship Treasury Sovereign");
+    await printBalanceSnapshot(clients, "After settlement (Step 8)");
 
     // Step 9: Monitor for DCA events
     console.log("\n[Step 9] Monitoring for DCA events...\n");
@@ -181,7 +182,7 @@ async function main() {
       const dcaResult = await monitorDcaExecution(clients, [dcaId], 50);
       printTestSummary(dcaResult);
     } catch (error) {
-      console.log("No DCA events detected (this may be expected if warmup hasn't completed)");
+      console.log("No DCA events detected (this may be expected if XCM propagation hasn't completed)");
       console.log(`Error: ${error}`);
     }
 
@@ -192,8 +193,7 @@ async function main() {
     await advanceAllBlocks(clients, 10);
 
     // Final balance check
-    console.log("\n[Final] Balance Summary\n");
-    await printHydrationBalances(clients, treasurySovAccount, "Fellowship Treasury Sovereign");
+    await printBalanceSnapshot(clients, "Final Balances");
     await getCurrentBlocks(clients);
 
     console.log("\n" + "=".repeat(60));

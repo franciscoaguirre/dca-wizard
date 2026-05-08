@@ -6,12 +6,12 @@
 import type { SS58String } from "polkadot-api";
 import type { ChopsticksClients } from "./setup";
 import { advanceAllBlocks, advanceCollectivesBlocks, advanceHydrationBlocks } from "./setup";
-import { HYDRATION_ASSETS, DECIMALS } from "./constants";
+import { HYDRATION_ASSETS, DECIMALS, ACCOUNTS, ALICE } from "./constants";
 
 // Track active DCAs for monitoring
 interface DcaInfo {
   id: number;
-  asset: "USDT" | "USDC" | "DOT";
+  asset: "HOLLAR" | "DOT";
 }
 
 const activeDcas: DcaInfo[] = [];
@@ -67,6 +67,70 @@ export async function checkDcaProgress(
 }
 
 /**
+ * Print a full balance snapshot across all chains for all relevant accounts
+ */
+export async function printBalanceSnapshot(
+  clients: ChopsticksClients,
+  label: string = "Balance Snapshot"
+) {
+  const accounts = [
+    { address: ACCOUNTS.FELLOWSHIP_TREASURY, name: "Fellowship Treasury" },
+    { address: ACCOUNTS.FELLOWSHIP_SALARY, name: "Fellowship Salary" },
+    { address: ALICE, name: "Alice" },
+  ];
+
+  console.log(`\n${"─".repeat(60)}`);
+  console.log(`  ${label}`);
+  console.log(`${"─".repeat(60)}`);
+
+  for (const { address, name } of accounts) {
+    console.log(`\n  ${name} (${address.slice(0, 8)}…${address.slice(-6)})`);
+
+    // Asset Hub - native DOT
+    try {
+      const ahAccount = await clients.ahApi.query.System.Account.getValue(address);
+      const dotFree = ahAccount.data.free;
+      const dotReserved = ahAccount.data.reserved;
+      console.log(`    Asset Hub   DOT: ${fmtBalance(dotFree, DECIMALS.DOT)} (reserved: ${fmtBalance(dotReserved, DECIMALS.DOT)})`);
+    } catch {
+      console.log(`    Asset Hub   DOT: 0`);
+    }
+
+    // Collectives - native balance
+    try {
+      const colAccount = await clients.collectivesApi.query.System.Account.getValue(address);
+      const colFree = colAccount.data.free;
+      console.log(`    Collectives DOT: ${fmtBalance(colFree, DECIMALS.DOT)}`);
+    } catch {
+      console.log(`    Collectives DOT: 0`);
+    }
+
+    // Hydration - DOT, HOLLAR
+    const hydAssets = [
+      { id: HYDRATION_ASSETS.polkadot.DOT, name: "DOT", decimals: DECIMALS.DOT },
+      { id: HYDRATION_ASSETS.polkadot.HOLLAR, name: "HOLLAR", decimals: DECIMALS.HOLLAR },
+    ];
+    for (const asset of hydAssets) {
+      try {
+        const bal = await clients.hydrationApi.apis.CurrenciesApi.free_balance(asset.id, address);
+        console.log(`    Hydration   ${asset.name.padEnd(4)}: ${fmtBalance(bal, asset.decimals)}`);
+      } catch {
+        console.log(`    Hydration   ${asset.name.padEnd(4)}: 0`);
+      }
+    }
+  }
+
+  console.log(`\n${"─".repeat(60)}\n`);
+}
+
+function fmtBalance(amount: bigint, decimals: number): string {
+  const divisor = 10n ** BigInt(decimals);
+  const whole = amount / divisor;
+  const frac = (amount % divisor).toString().padStart(decimals, "0").replace(/0+$/, "") || "0";
+  return `${whole.toLocaleString()}.${frac}`;
+}
+
+/**
  * Check balance on Hydration for a specific account and asset
  */
 export async function checkHydrationBalance(
@@ -105,25 +169,18 @@ export async function printHydrationBalances(
     `  DOT: ${Number(dotBalance) / 10 ** DECIMALS.DOT} DOT (${dotBalance} units)`
   );
 
-  const usdtBalance = await checkHydrationBalance(
+  const hollarBalance = await checkHydrationBalance(
     clients,
     account,
-    HYDRATION_ASSETS.polkadot.USDT
+    HYDRATION_ASSETS.polkadot.HOLLAR
   );
+  // HOLLAR has 18 decimals; bigint divide to avoid float precision loss.
+  const hollarWhole = hollarBalance / 10n ** BigInt(DECIMALS.HOLLAR);
   console.log(
-    `  USDT: ${Number(usdtBalance) / 10 ** DECIMALS.USDT} USDT (${usdtBalance} units)`
+    `  HOLLAR: ~${hollarWhole.toLocaleString()} HOLLAR (${hollarBalance} units)`
   );
 
-  const usdcBalance = await checkHydrationBalance(
-    clients,
-    account,
-    HYDRATION_ASSETS.polkadot.USDC
-  );
-  console.log(
-    `  USDC: ${Number(usdcBalance) / 10 ** DECIMALS.USDC} USDC (${usdcBalance} units)`
-  );
-
-  return { dotBalance, usdtBalance, usdcBalance };
+  return { dotBalance, hollarBalance };
 }
 
 /**

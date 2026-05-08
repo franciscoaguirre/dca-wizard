@@ -1,27 +1,34 @@
 /**
  * Collectives chain client
- * Handles connections and operations for Polkadot Collectives parachain
- * Uses shared smoldot light client instance
+ * Provider is selected by `provider-mode`: smoldot light client or WS RPC.
  */
 
 import { createClient } from 'polkadot-api';
 import { getSmProvider } from 'polkadot-api/sm-provider';
+import { getWsProvider } from 'polkadot-api/ws-provider';
+import { withPolkadotSdkCompat } from 'polkadot-api/polkadot-sdk-compat';
 import { polkadot_collectives } from 'polkadot-api/chains';
 import { collectives } from '../../../.papi/descriptors/dist';
 import type { NetworkType } from '../constants';
+import { getChainEndpoint } from '../constants';
 import { updateConnectionStatus } from './connection-status';
 import { addParachain } from './smoldot-manager';
+import { getProviderMode, providerModeChange$ } from './provider-mode';
 
 let collectivesClient: ReturnType<typeof createClient> | null = null;
 let collectivesApi: ReturnType<ReturnType<typeof createClient>['getTypedApi']> | null = null;
+
+providerModeChange$.subscribe(() => disconnectCollectives());
 
 export async function getCollectivesClient(network: NetworkType) {
   if (!collectivesClient) {
     updateConnectionStatus('collectives', 'connecting');
 
     try {
-      const collectivesChain = await addParachain(polkadot_collectives, network);
-      const provider = getSmProvider(collectivesChain);
+      const provider =
+        getProviderMode() === 'ws'
+          ? withPolkadotSdkCompat(getWsProvider(getChainEndpoint(network, 'COLLECTIVES')))
+          : getSmProvider(await addParachain(polkadot_collectives, network));
       collectivesClient = createClient(provider);
 
       updateConnectionStatus('collectives', 'connected');
