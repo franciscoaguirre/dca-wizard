@@ -36,17 +36,20 @@ export const PARACHAIN_IDS = {
   },
 } as const;
 
-// Asset IDs on Asset Hub
+// Asset IDs on Asset Hub.
 // HOLLAR is a foreign asset referenced by its multilocation
 // (parents=1, X2(Parachain(2034), GeneralIndex(222))), not by a local numeric id.
-// We keep the Hydration-side asset id here for completeness since the Asset Hub
-// representation is constructed directly from Hydration's location.
+// USDT (1984) and USDC (1337) are the canonical Asset Hub stablecoin asset ids.
 export const ASSET_HUB_ASSETS = {
   polkadot: {
     DOT: 'native', // Native asset
+    USDT: 1984,
+    USDC: 1337,
   },
   paseo: {
     DOT: 'native',
+    USDT: 0, // TODO: Look up actual Paseo USDT asset id
+    USDC: 0, // TODO: Look up actual Paseo USDC asset id
   },
 } as const;
 
@@ -66,6 +69,8 @@ export const HYDRATION_ASSETS = {
 export const DECIMALS = {
   DOT: 10,
   HOLLAR: 18,
+  USDT: 6,
+  USDC: 6,
 } as const;
 
 // Timing Constants

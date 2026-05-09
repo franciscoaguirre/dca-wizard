@@ -28,32 +28,29 @@ const Slider = React.forwardRef<HTMLInputElement, SliderProps>(
         onChange={(e) => onChange(Number(e.target.value))}
         disabled={disabled}
         className={cn(
-          'w-full h-2 rounded-full appearance-none cursor-pointer',
-          'bg-neutral-200',
+          'w-full h-1.5 rounded-full appearance-none cursor-pointer',
           '[&::-webkit-slider-thumb]:appearance-none',
           '[&::-webkit-slider-thumb]:w-5',
           '[&::-webkit-slider-thumb]:h-5',
           '[&::-webkit-slider-thumb]:rounded-full',
-          '[&::-webkit-slider-thumb]:bg-white',
+          '[&::-webkit-slider-thumb]:bg-[var(--bg-surface-container)]',
           '[&::-webkit-slider-thumb]:border-2',
-          '[&::-webkit-slider-thumb]:border-primary-500',
+          '[&::-webkit-slider-thumb]:border-[var(--fg-primary)]',
           '[&::-webkit-slider-thumb]:cursor-pointer',
-          '[&::-webkit-slider-thumb]:shadow-md',
           '[&::-webkit-slider-thumb]:transition-transform',
           '[&::-webkit-slider-thumb]:hover:scale-110',
           '[&::-moz-range-thumb]:w-5',
           '[&::-moz-range-thumb]:h-5',
           '[&::-moz-range-thumb]:rounded-full',
-          '[&::-moz-range-thumb]:bg-white',
+          '[&::-moz-range-thumb]:bg-[var(--bg-surface-container)]',
           '[&::-moz-range-thumb]:border-2',
-          '[&::-moz-range-thumb]:border-primary-500',
+          '[&::-moz-range-thumb]:border-[var(--fg-primary)]',
           '[&::-moz-range-thumb]:cursor-pointer',
-          '[&::-moz-range-thumb]:shadow-md',
           'disabled:cursor-not-allowed disabled:opacity-50',
           className
         )}
         style={{
-          background: `linear-gradient(to right, var(--color-primary-500, #E6007A) 0%, var(--color-primary-500, #E6007A) ${percentage}%, #e5e5e5 ${percentage}%, #e5e5e5 100%)`,
+          background: `linear-gradient(to right, var(--fg-primary) 0%, var(--fg-primary) ${percentage}%, var(--bg-surface-nested) ${percentage}%, var(--bg-surface-nested) 100%)`,
         }}
       />
     );

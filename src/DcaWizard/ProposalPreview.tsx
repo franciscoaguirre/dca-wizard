@@ -5,21 +5,12 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import type { DcaProposal } from '../governance/builder';
-import type { ProposalMode } from '../api/constants';
+import { TIMING } from '../api/constants';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Alert, AlertDescription, AlertTitle } from '../components/ui/alert';
-import { ArrowRight, AlertTriangle, Info, Code2, Copy, Check } from 'lucide-react';
+import { ArrowRight, AlertTriangle, Code2, Copy, Check } from 'lucide-react';
 import { encodeProposal, getTransactionBreakdown } from '../governance/call-encoder';
-
-const MODE_DESCRIPTIONS: Record<ProposalMode, string> = {
-  setup:
-    'A single V5 XCM transfers DOT from the Fellowship Treasury to its Hydration sovereign and starts a DCA schedule that converts DOT into HOLLAR over time. Accumulated HOLLAR remains on the Fellowship Treasury sovereign on Hydration.',
-  return:
-    'This proposal schedules periodic returns of HOLLAR from the Fellowship Treasury sovereign on Hydration back to Fellowship Treasury and Salary on Asset Hub via an XCM hop (AH → Hydration → AH).',
-  both:
-    'A combined setup XCM and a scheduled periodic-return XCM, batched into one proposal. DCA accumulates HOLLAR on the Fellowship Treasury sovereign on Hydration, then periodic returns split it between Treasury and Salary on Asset Hub.',
-};
 
 interface ProposalPreviewProps {
   proposal: DcaProposal;
@@ -29,7 +20,6 @@ interface ProposalPreviewProps {
 }
 
 function formatHollarDisplay(amount18: bigint): string {
-  // Approximate two decimals: divide by 10^16 for centi-HOLLAR, show with .XX
   const centi = amount18 / 10n ** 16n;
   const whole = centi / 100n;
   const frac = (centi % 100n).toString().padStart(2, '0');
@@ -73,70 +63,76 @@ export function ProposalPreview({ proposal, dotPriceUsd, onBack, onNext }: Propo
   };
 
   return (
-    <div className="space-y-6">
-      {/* Warnings */}
+    <div className="space-y-5">
       {proposal.validation.warnings.length > 0 && (
         <Alert variant="warning">
-          <AlertTriangle className="h-4 w-4" />
-          <AlertTitle>Important Considerations</AlertTitle>
-          <AlertDescription>
-            <ul className="list-disc list-inside space-y-1 mt-2">
-              {proposal.validation.warnings.map((warning, idx) => (
-                <li key={idx}>{warning}</li>
-              ))}
-            </ul>
-          </AlertDescription>
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="h-4 w-4 mt-0.5 text-warning" />
+            <div>
+              <AlertTitle>Things to check before submitting</AlertTitle>
+              <AlertDescription>
+                <ul className="list-disc list-inside space-y-1 mt-1">
+                  {proposal.validation.warnings.map((warning, idx) => (
+                    <li key={idx}>{warning}</li>
+                  ))}
+                </ul>
+              </AlertDescription>
+            </div>
+          </div>
         </Alert>
       )}
 
       {/* Consolidated Summary */}
       <Card>
         <CardHeader className="pb-2">
-          <CardTitle>Proposal Summary</CardTitle>
+          <CardTitle>Proposal summary</CardTitle>
         </CardHeader>
         <CardContent>
           <div className="space-y-6">
-            {/* Converting section (setup / both) */}
             {showSetup && (
-              <div className="pb-4 border-b border-neutral-200">
-                <p className="text-sm text-neutral-500 mb-1">Converting</p>
-                <p className="text-xl font-semibold text-neutral-800">
+              <div className="pb-4 border-b border-divider">
+                <p className="text-xs text-tertiary uppercase tracking-wide mb-1">Converting</p>
+                <p className="text-xl font-semibold text-primary">
                   {(Number(inputs.dotAmount ?? 0n) / 1e10).toLocaleString()} DOT
-                  <span className="text-neutral-400 mx-2">&rarr;</span>
-                  <span className="text-success-600">
-                    ~{formatHollarDisplay(calculations?.estimatedHollarTotal ?? 0n)} HOLLAR
-                  </span>
+                  <span className="text-tertiary mx-2">→</span>
+                  ≈ {formatHollarDisplay(calculations?.estimatedHollarTotal ?? 0n)} HOLLAR
                 </p>
               </div>
             )}
 
-            {/* Summary columns */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
               {showSetup && (
                 <div className="space-y-3">
-                  <h4 className="text-sm font-semibold text-neutral-700">DCA Strategy</h4>
+                  <h4 className="text-xs font-semibold text-tertiary uppercase tracking-wide">DCA strategy</h4>
                   <div className="space-y-2 text-sm">
                     <div className="flex justify-between">
-                      <span className="text-neutral-500">Total Trades</span>
-                      <span className="text-neutral-800 font-medium">
-                        {calculations?.totalTrades?.toLocaleString() ?? '---'}
+                      <span className="text-secondary">Frequency</span>
+                      <span className="text-primary font-medium">
+                        Every {(inputs.dcaFrequencyBlocks ?? 0).toLocaleString()} blocks
+                        {' '}(≈ {Math.round(((inputs.dcaFrequencyBlocks ?? 0) * TIMING.BLOCK_TIME_SECONDS) / 60)} min)
                       </span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-neutral-500">DOT per trade</span>
-                      <span className="text-neutral-800 font-medium">
-                        ~{(Number(calculations?.dotPerTrade ?? 0n) / 1e10).toFixed(2)}
+                      <span className="text-secondary">Total trades</span>
+                      <span className="text-primary font-medium">
+                        {calculations?.totalTrades?.toLocaleString() ?? '—'}
                       </span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-neutral-500">Duration</span>
-                      <span className="text-neutral-800 font-medium">
+                      <span className="text-secondary">DOT per trade</span>
+                      <span className="text-primary font-medium">
+                        ≈ {(Number(calculations?.dotPerTrade ?? 0n) / 1e10).toFixed(2)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-secondary">Duration</span>
+                      <span className="text-primary font-medium">
                         {inputs.dcaDurationDays ?? 0} days
                       </span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-neutral-500">Slippage</span>
-                      <span className="text-neutral-800 font-medium">
+                      <span className="text-secondary">Slippage</span>
+                      <span className="text-primary font-medium">
                         {inputs.slippagePercent ?? 0}%
                       </span>
                     </div>
@@ -146,24 +142,24 @@ export function ProposalPreview({ proposal, dotPriceUsd, onBack, onNext }: Propo
 
               {showReturn && (
                 <div className="space-y-3">
-                  <h4 className="text-sm font-semibold text-neutral-700">Periodic Returns</h4>
+                  <h4 className="text-xs font-semibold text-tertiary uppercase tracking-wide">Periodic returns</h4>
                   <div className="space-y-2 text-sm">
                     <div className="flex justify-between">
-                      <span className="text-neutral-500">Frequency</span>
-                      <span className="text-neutral-800 font-medium">
+                      <span className="text-secondary">Frequency</span>
+                      <span className="text-primary font-medium">
                         Every {inputs.returnFrequencyDays ?? 7} days
                       </span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-neutral-500">Returns</span>
-                      <span className="text-neutral-800 font-medium">
+                      <span className="text-secondary">Returns</span>
+                      <span className="text-primary font-medium">
                         {inputs.numberOfReturns ?? 0}
                       </span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-neutral-500">Per return</span>
-                      <span className="text-neutral-800 font-medium">
-                        ~{formatHollarDisplay(calculations?.estimatedHollarPerReturn ?? 0n)} HOLLAR
+                      <span className="text-secondary">Per return</span>
+                      <span className="text-primary font-medium">
+                        ≈ {formatHollarDisplay(calculations?.estimatedHollarPerReturn ?? 0n)} HOLLAR
                       </span>
                     </div>
                   </div>
@@ -171,32 +167,32 @@ export function ProposalPreview({ proposal, dotPriceUsd, onBack, onNext }: Propo
               )}
 
               <div className="space-y-3">
-                <h4 className="text-sm font-semibold text-neutral-700">Distribution</h4>
+                <h4 className="text-xs font-semibold text-tertiary uppercase tracking-wide">Distribution</h4>
                 <div className="space-y-2 text-sm">
                   {showReturn && (
                     <>
                       <div className="flex justify-between">
-                        <span className="text-neutral-500">Fellowship Treasury</span>
-                        <span className="text-neutral-800 font-medium">
+                        <span className="text-secondary">Fellowship Treasury</span>
+                        <span className="text-primary font-medium">
                           {inputs.treasurySplitPercent ?? 0}%
                         </span>
                       </div>
                       <div className="flex justify-between">
-                        <span className="text-neutral-500">Fellowship Salary</span>
-                        <span className="text-neutral-800 font-medium">
+                        <span className="text-secondary">Fellowship Salary</span>
+                        <span className="text-primary font-medium">
                           {inputs.salarySplitPercent ?? 0}%
                         </span>
                       </div>
                     </>
                   )}
                   <div className="flex justify-between">
-                    <span className="text-neutral-500">Governance</span>
-                    <span className="text-neutral-800 font-medium">Architects track</span>
+                    <span className="text-secondary">Governance</span>
+                    <span className="text-primary font-medium">Architects track</span>
                   </div>
                   <div className="flex justify-between">
-                    <span className="text-neutral-500">Est. fees</span>
-                    <span className="text-neutral-800 font-medium">
-                      ~{(Number(calculations?.feeEstimate ?? 0n) / 1e10).toFixed(3)} DOT
+                    <span className="text-secondary">Est. fees</span>
+                    <span className="text-primary font-medium">
+                      ≈ {(Number(calculations?.feeEstimate ?? 0n) / 1e10).toFixed(3)} DOT
                     </span>
                   </div>
                 </div>
@@ -210,29 +206,29 @@ export function ProposalPreview({ proposal, dotPriceUsd, onBack, onNext }: Propo
       <Card>
         <CardHeader className="pb-2">
           <CardTitle>
-            {breakdown.totalCalls === 1 ? 'Proposal Call' : `Batched Proposal (${breakdown.totalCalls} calls)`}
+            {breakdown.totalCalls === 1 ? 'Proposal call' : `Batched proposal (${breakdown.totalCalls} calls)`}
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <p className="text-sm text-neutral-600 mb-4">
+          <p className="text-sm text-secondary mb-4">
             {breakdown.totalCalls === 1
               ? 'A single root call submitted on the Collectives chain. The Scheduler handles periodic execution where applicable.'
               : 'Operations are wrapped in a Utility.batch_all call on the Collectives chain. The Scheduler handles periodic execution of the return cycle.'}
           </p>
-          <div className="space-y-3">
+          <div className="space-y-2">
             {breakdown.calls.map((call, idx) => (
               <div
                 key={idx}
-                className="p-3 rounded-lg border border-neutral-200"
+                className="p-4 rounded-nested bg-surface-nested"
               >
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-3">
                   <div>
-                    <p className="font-medium text-neutral-800">
+                    <p className="text-sm font-semibold text-primary">
                       {idx + 1}. {call.name}
                     </p>
-                    <p className="text-sm text-neutral-500">{call.description}</p>
+                    <p className="text-sm text-secondary mt-0.5">{call.description}</p>
                   </div>
-                  <span className="text-xs px-2 py-1 rounded-full bg-neutral-100 text-neutral-500 whitespace-nowrap">
+                  <span className="text-xs px-2.5 py-1 rounded-full bg-action-secondary text-secondary whitespace-nowrap">
                     {call.timing}
                   </span>
                 </div>
@@ -245,23 +241,23 @@ export function ProposalPreview({ proposal, dotPriceUsd, onBack, onNext }: Propo
       {/* Encoded Call Data */}
       <Card>
         <CardHeader className="pb-2">
-          <CardTitle>Encoded Call Data</CardTitle>
+          <CardTitle>Encoded call data</CardTitle>
         </CardHeader>
         <CardContent>
           {isEncoding ? (
             <div className="flex items-center justify-center py-8">
               <div className="text-center">
-                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-600 mx-auto mb-2"></div>
-                <p className="text-sm text-neutral-600">Encoding transaction...</p>
+                <div className="animate-spin rounded-full h-6 w-6 border-2 border-primary border-t-transparent mx-auto mb-2" />
+                <p className="text-sm text-secondary">Encoding transaction…</p>
               </div>
             </div>
           ) : encoded ? (
             <div className="space-y-3">
-              <div className="bg-neutral-50 rounded-lg p-4 border border-neutral-200">
+              <div className="bg-surface-nested rounded-nested p-4">
                 <div className="flex items-center justify-between mb-2">
-                  <span className="text-sm font-medium text-neutral-700">Call Data:</span>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-neutral-500">{(encoded.length - 2) / 2} bytes</span>
+                  <span className="text-xs text-tertiary uppercase tracking-wide">Call data</span>
+                  <div className="flex items-center gap-3">
+                    <span className="text-xs text-tertiary">{(encoded.length - 2) / 2} bytes</span>
                     <Button
                       variant="ghost"
                       size="sm"
@@ -275,8 +271,8 @@ export function ProposalPreview({ proposal, dotPriceUsd, onBack, onNext }: Propo
                     </Button>
                   </div>
                 </div>
-                <div className="bg-white rounded border border-neutral-200 p-3 overflow-x-auto">
-                  <code className="text-xs text-neutral-700 font-mono break-all">
+                <div className="overflow-x-auto">
+                  <code className="text-xs text-secondary font-mono break-all">
                     {encoded}
                   </code>
                 </div>
@@ -284,37 +280,38 @@ export function ProposalPreview({ proposal, dotPriceUsd, onBack, onNext }: Propo
 
               {(encoded.length - 2) / 2 > 10 * 1024 && (
                 <Alert variant="warning">
-                  <AlertTriangle className="h-4 w-4" />
-                  <AlertTitle>Large Call</AlertTitle>
-                  <AlertDescription>
-                    This call is larger than 10KB and will need to be submitted as a preimage first.
-                  </AlertDescription>
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle className="h-4 w-4 mt-0.5 text-warning" />
+                    <div>
+                      <AlertTitle>Large call</AlertTitle>
+                      <AlertDescription>
+                        This call is larger than 10 KB and will be submitted as a preimage first.
+                      </AlertDescription>
+                    </div>
+                  </div>
                 </Alert>
               )}
             </div>
           ) : (
             <Alert variant="warning">
-              <Code2 className="h-4 w-4" />
-              <AlertTitle>Encoding Error</AlertTitle>
-              <AlertDescription>{encodingError}</AlertDescription>
+              <div className="flex items-start gap-2">
+                <Code2 className="h-4 w-4 mt-0.5 text-warning" />
+                <div>
+                  <AlertTitle>Encoding error</AlertTitle>
+                  <AlertDescription>{encodingError}</AlertDescription>
+                </div>
+              </div>
             </Alert>
           )}
         </CardContent>
       </Card>
 
-      <Alert variant="info">
-        <Info className="h-4 w-4" />
-        <AlertTitle>How It Works</AlertTitle>
-        <AlertDescription>{MODE_DESCRIPTIONS[mode]}</AlertDescription>
-      </Alert>
-
-      {/* Action Buttons */}
       <div className="flex justify-between">
         <Button variant="outline" onClick={onBack}>
-          Back to Form
+          Back
         </Button>
         <Button size="lg" onClick={onNext}>
-          Submit Proposal
+          Continue to submit
           <ArrowRight className="ml-2 h-4 w-4" />
         </Button>
       </div>

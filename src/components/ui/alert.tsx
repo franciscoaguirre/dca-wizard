@@ -11,12 +11,12 @@ const Alert = React.forwardRef<HTMLDivElement, AlertProps>(
       ref={ref}
       role="alert"
       className={cn(
-        'relative w-full rounded-r-lg border-l-4 p-4',
+        'relative w-full rounded-nested px-4 py-3 text-primary',
         {
-          'border-info-500 bg-info-50 text-neutral-800': variant === 'info',
-          'border-warning-500 bg-warning-50 text-neutral-800': variant === 'warning',
-          'border-error-500 bg-error-50 text-neutral-800': variant === 'error',
-          'border-success-500 bg-success-50 text-neutral-800': variant === 'success',
+          'bg-surface-container': variant === 'info',
+          'bg-status-warning/10': variant === 'warning',
+          'bg-status-error/10': variant === 'error',
+          'bg-status-success/10': variant === 'success',
         },
         className
       )}
@@ -30,7 +30,7 @@ const AlertTitle = React.forwardRef<HTMLParagraphElement, React.HTMLAttributes<H
   ({ className, ...props }, ref) => (
     <h5
       ref={ref}
-      className={cn('mb-1 font-medium leading-none tracking-tight', className)}
+      className={cn('mb-1 text-sm font-semibold leading-tight text-primary', className)}
       {...props}
     />
   )
@@ -41,7 +41,7 @@ const AlertDescription = React.forwardRef<HTMLParagraphElement, React.HTMLAttrib
   ({ className, ...props }, ref) => (
     <div
       ref={ref}
-      className={cn('text-sm [&_p]:leading-relaxed', className)}
+      className={cn('text-sm text-secondary [&_p]:leading-relaxed', className)}
       {...props}
     />
   )

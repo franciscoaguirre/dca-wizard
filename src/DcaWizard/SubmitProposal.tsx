@@ -1,304 +1,438 @@
 /**
  * Submit Proposal Component
- * Handles the final submission of the referendum proposal
+ * Connects a wallet, optionally notes a preimage for large calls, and submits
+ * a Fellowship referendum on the Architects track.
  */
 
 import { useState } from 'react';
 import type { DcaProposal } from '../governance/builder';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card';
+import { encodeProposal } from '../governance/call-encoder';
+import { TIMING } from '../api/constants';
+import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Alert, AlertDescription, AlertTitle } from '../components/ui/alert';
-import { CheckCircle2, Loader2, AlertCircle } from 'lucide-react';
+import { CheckCircle2, Loader2, AlertCircle, Wallet, ExternalLink } from 'lucide-react';
+import { Binary } from 'polkadot-api';
+import {
+  listExtensions,
+  connectExtension,
+  type InjectedExtension,
+  type InjectedPolkadotAccount,
+} from '../api/wallets';
+import { getCollectivesApi } from '../api/clients/collectives';
+
+type Status =
+  | { kind: 'idle' }
+  | { kind: 'connecting' }
+  | { kind: 'choose-extension'; names: string[] }
+  | { kind: 'choose-account'; extension: InjectedExtension; accounts: InjectedPolkadotAccount[] }
+  | { kind: 'ready'; account: InjectedPolkadotAccount }
+  | { kind: 'submitting'; account: InjectedPolkadotAccount; step: 'encoding' | 'preimage' | 'referendum' }
+  | { kind: 'success'; account: InjectedPolkadotAccount; referendumId: number }
+  | { kind: 'error'; message: string; previous: Status };
 
 interface SubmitProposalProps {
   proposal: DcaProposal;
   onBack: () => void;
 }
 
+const POLKASSEMBLY_BASE = 'https://collectives.polkassembly.io/referenda';
+
+function shortAddress(addr: string): string {
+  if (addr.length < 12) return addr;
+  return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
+}
+
 export function SubmitProposal({ proposal, onBack }: SubmitProposalProps) {
-  const [status, setStatus] = useState<'idle' | 'connecting' | 'signing' | 'submitting' | 'success' | 'error'>('idle');
-  const [error, setError] = useState<string | null>(null);
-  const [referendumId] = useState<number | null>(null);
-  const isProcessing = status === 'connecting' || status === 'signing' || status === 'submitting';
+  const [status, setStatus] = useState<Status>({ kind: 'idle' });
+  const isProcessing = status.kind === 'submitting' || status.kind === 'connecting';
+
+  const handleConnect = async () => {
+    setStatus({ kind: 'connecting' });
+    const names = listExtensions();
+    if (names.length === 0) {
+      setStatus({
+        kind: 'error',
+        message: 'No wallet extensions found. Install Talisman, Subwallet, or the Polkadot{.js} extension and reload.',
+        previous: { kind: 'idle' },
+      });
+      return;
+    }
+    if (names.length === 1) {
+      await pickExtension(names[0]);
+      return;
+    }
+    setStatus({ kind: 'choose-extension', names });
+  };
+
+  const pickExtension = async (name: string) => {
+    setStatus({ kind: 'connecting' });
+    try {
+      const extension = await connectExtension(name);
+      const accounts = extension.getAccounts();
+      if (accounts.length === 0) {
+        setStatus({
+          kind: 'error',
+          message: `${name} has no accounts available. Add an account in the wallet and reload.`,
+          previous: { kind: 'idle' },
+        });
+        return;
+      }
+      if (accounts.length === 1) {
+        setStatus({ kind: 'ready', account: accounts[0] });
+        return;
+      }
+      setStatus({ kind: 'choose-account', extension, accounts });
+    } catch (e) {
+      setStatus({
+        kind: 'error',
+        message: e instanceof Error ? e.message : 'Failed to connect to wallet',
+        previous: { kind: 'idle' },
+      });
+    }
+  };
 
   const handleSubmit = async () => {
+    if (status.kind !== 'ready') return;
+    const account = status.account;
+    const readyStatus: Status = { kind: 'ready', account };
+
     try {
-      setStatus('connecting');
-      setError(null);
+      setStatus({ kind: 'submitting', account, step: 'encoding' });
+      const { encoded, error: encErr } = await encodeProposal(proposal, 0);
+      if (!encoded) throw new Error(encErr ?? 'Failed to encode proposal');
 
-      // In production, this would:
-      // 1. Connect to wallet (via ReactiveDot or polkadot-api)
-      // 2. Build the complete batch call with chain API
-      // 3. Create preimage if call is large
-      // 4. Submit referendum via Referenda.submit
-      // 5. Sign and broadcast transaction
-      // 6. Monitor for finalization
-      // 7. Extract referendum ID from events
+      const callBinary = Binary.fromHex(encoded);
+      const callSize = callBinary.asBytes().length;
+      const collectivesApi = await getCollectivesApi('polkadot');
 
-      // For now, show that this functionality needs wallet integration
-      throw new Error(
-        'Wallet integration required. This needs ReactiveDot/polkadot-api wallet connection.'
+      let bounded:
+        | { type: 'Inline'; value: Binary }
+        | { type: 'Lookup'; value: { hash: Binary; len: number } };
+
+      if (callSize > 10 * 1024) {
+        setStatus({ kind: 'submitting', account, step: 'preimage' });
+        const preimageTx = collectivesApi.tx.Preimage.note_preimage({ bytes: callBinary });
+        const preimageResult = await preimageTx.signAndSubmit(account.polkadotSigner);
+        if (!preimageResult.ok) {
+          throw new Error(formatDispatchError(preimageResult.dispatchError));
+        }
+        const noted = preimageResult.events.find(
+          (e: { type: string; value: { type: string } }) =>
+            e.type === 'Preimage' && e.value.type === 'Noted',
+        );
+        if (!noted || noted.value.type !== 'Noted') {
+          throw new Error('Preimage submitted but no Noted event was found');
+        }
+        bounded = {
+          type: 'Lookup',
+          value: { hash: noted.value.value.hash as unknown as Binary, len: callSize },
+        };
+      } else {
+        bounded = { type: 'Inline', value: callBinary };
+      }
+
+      setStatus({ kind: 'submitting', account, step: 'referendum' });
+      const submitTx = collectivesApi.tx.FellowshipReferenda.submit({
+        proposal_origin: {
+          type: 'FellowshipOrigins',
+          value: { type: 'Architects', value: undefined },
+        } as never,
+        proposal: bounded as never,
+        enactment_moment: { type: 'After', value: 0 },
+      });
+      const submitResult = await submitTx.signAndSubmit(account.polkadotSigner);
+      if (!submitResult.ok) {
+        throw new Error(formatDispatchError(submitResult.dispatchError));
+      }
+      const submitted = submitResult.events.find(
+        (e: { type: string; value: { type: string } }) =>
+          e.type === 'FellowshipReferenda' && e.value.type === 'Submitted',
       );
-
-      // Simulated flow (would be real in production):
-      // setStatus('signing');
-      // await new Promise(resolve => setTimeout(resolve, 2000));
-      //
-      // setStatus('submitting');
-      // const tx = await assetHubApi.tx.Referenda.submit({ ... });
-      // const result = await tx.signAndSend(account);
-      //
-      // setReferendumId(extractReferendumId(result.events));
-      // setStatus('success');
-
-    } catch (err) {
-      setStatus('error');
-      setError(err instanceof Error ? err.message : 'Failed to submit proposal');
+      if (!submitted || submitted.value.type !== 'Submitted') {
+        throw new Error('Referendum submitted but no Submitted event was found');
+      }
+      const referendumId = (submitted.value.value as { index: number }).index;
+      setStatus({ kind: 'success', account, referendumId });
+    } catch (e) {
+      setStatus({
+        kind: 'error',
+        message: e instanceof Error ? e.message : 'Submission failed',
+        previous: readyStatus,
+      });
     }
   };
 
   return (
-    <div className="space-y-6">
-      {/* Current Status */}
-      {status === 'idle' && (
-        <Alert variant="info">
-          <AlertTitle>Ready to Submit</AlertTitle>
-          <AlertDescription>
-            Click the button below to connect your wallet and submit the referendum proposal.
-          </AlertDescription>
-        </Alert>
+    <div className="space-y-5">
+      <SubmissionStatus status={status} />
+
+      {status.kind === 'choose-extension' && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle>Choose a wallet</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-2">
+              {status.names.map((name) => (
+                <button
+                  key={name}
+                  type="button"
+                  onClick={() => pickExtension(name)}
+                  className="w-full text-left px-4 py-3 rounded-nested bg-surface-nested hover:bg-selection-container-hover transition-colors cursor-pointer"
+                >
+                  <span className="text-sm font-semibold text-primary capitalize">{name.replace(/-/g, ' ')}</span>
+                </button>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
       )}
 
-      {status === 'connecting' && (
-        <Alert variant="info">
-          <Loader2 className="h-4 w-4 animate-spin" />
-          <AlertTitle>Connecting to Wallet</AlertTitle>
-          <AlertDescription>
-            Please authorize the connection in your wallet extension.
-          </AlertDescription>
-        </Alert>
+      {status.kind === 'choose-account' && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle>Choose an account</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-2">
+              {status.accounts.map((acc) => (
+                <button
+                  key={acc.address}
+                  type="button"
+                  onClick={() => setStatus({ kind: 'ready', account: acc })}
+                  className="w-full text-left px-4 py-3 rounded-nested bg-surface-nested hover:bg-selection-container-hover transition-colors cursor-pointer"
+                >
+                  <p className="text-sm font-semibold text-primary">{acc.name ?? 'Unnamed account'}</p>
+                  <p className="text-xs text-tertiary font-mono mt-0.5">{shortAddress(acc.address)}</p>
+                </button>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
       )}
 
-      {status === 'signing' && (
-        <Alert variant="info">
-          <Loader2 className="h-4 w-4 animate-spin" />
-          <AlertTitle>Awaiting Signature</AlertTitle>
-          <AlertDescription>
-            Please sign the transaction in your wallet.
-          </AlertDescription>
-        </Alert>
-      )}
-
-      {status === 'submitting' && (
-        <Alert variant="info">
-          <Loader2 className="h-4 w-4 animate-spin" />
-          <AlertTitle>Submitting Proposal</AlertTitle>
-          <AlertDescription>
-            Transaction is being processed on-chain. This may take a few moments.
-          </AlertDescription>
-        </Alert>
-      )}
-
-      {status === 'success' && (
-        <Alert variant="success">
-          <CheckCircle2 className="h-4 w-4" />
-          <AlertTitle>Proposal Submitted Successfully!</AlertTitle>
-          <AlertDescription>
-            {referendumId !== null && (
-              <p>Your referendum ID is: <strong>#{referendumId}</strong></p>
-            )}
-            <p className="mt-2">
-              The proposal is now open for voting. Visit Polkassembly or Subsquare to track its
-              progress.
-            </p>
-          </AlertDescription>
-        </Alert>
-      )}
-
-      {status === 'error' && (
-        <Alert variant="error">
-          <AlertCircle className="h-4 w-4" />
-          <AlertTitle>Submission Failed</AlertTitle>
-          <AlertDescription>
-            {error}
-          </AlertDescription>
-        </Alert>
-      )}
-
-      {/* Proposal Summary Card */}
       <Card>
         <CardHeader>
-          <CardTitle>Proposal Summary</CardTitle>
-          <CardDescription>
-            Final review before submission
-          </CardDescription>
+          <CardTitle>Proposal summary</CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="divide-y divide-neutral-200">
-            <div className="flex justify-between py-3 first:pt-0">
-              <span className="text-sm font-medium text-neutral-700">Network:</span>
-              <span className="text-sm text-neutral-600">
-                {proposal.inputs.network === 'polkadot' ? 'Polkadot' : 'Paseo'}
-              </span>
-            </div>
-
-            <div className="flex justify-between py-3">
-              <span className="text-sm font-medium text-neutral-700">Mode:</span>
-              <span className="text-sm text-neutral-600">
-                {proposal.inputs.mode}
-              </span>
-            </div>
-
+          <div className="divide-y divide-divider">
+            <SummaryRow label="Network" value={proposal.inputs.network === 'polkadot' ? 'Polkadot' : 'Paseo'} />
+            <SummaryRow label="Mode" value={modeLabel(proposal.inputs.mode)} />
             {proposal.inputs.mode !== 'return' && (
               <>
-                <div className="flex justify-between py-3">
-                  <span className="text-sm font-medium text-neutral-700">DOT Amount:</span>
-                  <span className="text-sm text-neutral-600">
-                    {(Number(proposal.inputs.dotAmount ?? 0n) / 1e10).toLocaleString()} DOT
-                  </span>
-                </div>
-
-                <div className="flex justify-between py-3">
-                  <span className="text-sm font-medium text-neutral-700">Target:</span>
-                  <span className="text-sm text-neutral-600">HOLLAR</span>
-                </div>
-
-                <div className="flex justify-between py-3">
-                  <span className="text-sm font-medium text-neutral-700">Duration:</span>
-                  <span className="text-sm text-neutral-600">
-                    {proposal.inputs.dcaDurationDays} days
-                  </span>
-                </div>
-
-                <div className="flex justify-between py-3">
-                  <span className="text-sm font-medium text-neutral-700">Total Trades:</span>
-                  <span className="text-sm text-neutral-600">
-                    {proposal.calculations.totalTrades}
-                  </span>
-                </div>
+                <SummaryRow
+                  label="DOT amount"
+                  value={`${(Number(proposal.inputs.dotAmount ?? 0n) / 1e10).toLocaleString()} DOT`}
+                />
+                <SummaryRow label="Duration" value={`${proposal.inputs.dcaDurationDays} days`} />
+                <SummaryRow
+                  label="Frequency"
+                  value={`Every ${(proposal.inputs.dcaFrequencyBlocks ?? 0).toLocaleString()} blocks (≈ ${Math.round(((proposal.inputs.dcaFrequencyBlocks ?? 0) * TIMING.BLOCK_TIME_SECONDS) / 60)} min)`}
+                />
+                <SummaryRow label="Trades" value={String(proposal.calculations.totalTrades)} />
               </>
             )}
-
             {proposal.inputs.mode !== 'setup' && (
-              <div className="flex justify-between py-3">
-                <span className="text-sm font-medium text-neutral-700">Returns:</span>
-                <span className="text-sm text-neutral-600">
-                  {proposal.inputs.numberOfReturns}x every {proposal.inputs.returnFrequencyDays} days
-                </span>
-              </div>
+              <SummaryRow
+                label="Returns"
+                value={`${proposal.inputs.numberOfReturns}× every ${proposal.inputs.returnFrequencyDays} days`}
+              />
             )}
-
-            <div className="flex justify-between py-3 last:pb-0">
-              <span className="text-sm font-medium text-neutral-700">Chain:</span>
-              <span className="text-sm text-neutral-600">
-                Collectives (Architects track)
-              </span>
-            </div>
+            <SummaryRow label="Track" value="Architects (Collectives)" />
           </div>
         </CardContent>
       </Card>
 
-      {/* Requirements Card */}
       <Card>
         <CardHeader>
-          <CardTitle>Requirements</CardTitle>
+          <CardTitle>Before submitting</CardTitle>
         </CardHeader>
         <CardContent>
-          <ul className="list-disc list-inside space-y-2 text-sm text-neutral-600">
-            <li>
-              You need a Polkadot wallet (Talisman, Subwallet, PolkadotJS, etc.)
-            </li>
-            <li>
-              Your account must have sufficient DOT for the submission deposit (typically ~100 DOT)
-            </li>
-            <li>
-              You must have Architect rank (Dan 4+) on the Collectives chain to submit
-            </li>
-            <li>
-              The proposal will be submitted to the Collectives chain's Architects track
-            </li>
-            <li>
-              After submission, Fellowship members will vote on the proposal
-            </li>
-            <li>
-              If approved, the proposal will execute automatically
-            </li>
+          <ul className="space-y-2 text-sm text-secondary">
+            <li>You need an Architect-rank account (Dan 4 or higher) on the Collectives chain.</li>
+            <li>The submission deposit is paid from the signing account; refunded when the referendum closes.</li>
+            <li>After submission, the Decision Deposit must be placed for the referendum to enter the decision period.</li>
           </ul>
         </CardContent>
       </Card>
 
-      {/* Next Steps Card (shown after success) */}
-      {status === 'success' && (
+      {status.kind === 'success' && (
         <Card>
           <CardHeader>
-            <CardTitle>Next Steps</CardTitle>
+            <CardTitle>Next steps</CardTitle>
           </CardHeader>
           <CardContent>
-            <ol className="list-decimal list-inside space-y-2 text-sm text-neutral-600">
+            <ol className="space-y-2 text-sm text-secondary list-decimal list-inside">
               <li>
-                Track your proposal on governance platforms:
-                <ul className="list-disc list-inside ml-4 mt-1">
-                  <li>Polkassembly: polkassembly.io</li>
-                  <li>Subsquare: polkadot.subsquare.io</li>
-                </ul>
+                Track this referendum on{' '}
+                <a
+                  href={`${POLKASSEMBLY_BASE}/${status.referendumId}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-link hover:text-link-hover inline-flex items-center gap-1"
+                >
+                  Polkassembly <ExternalLink className="w-3 h-3" />
+                </a>
+                .
               </li>
-              <li>
-                Engage with the community to discuss and promote your proposal
-              </li>
-              <li>
-                Monitor voting progress during the decision period
-              </li>
-              <li>
-                If approved, the proposal will execute automatically
-              </li>
-              <li>
-                Monitor DCA execution on Hydration via block explorer
-              </li>
+              <li>Place the Decision Deposit so voting can begin.</li>
+              <li>Engage with the Fellowship to discuss and promote the proposal.</li>
+              <li>If approved, execution is automatic. Watch DCA progress on Hydration.</li>
             </ol>
           </CardContent>
         </Card>
       )}
 
-      {/* Action Buttons */}
-      <div className="flex justify-between">
+      <div className="flex justify-between gap-3">
         <Button variant="outline" onClick={onBack} disabled={isProcessing}>
-          Back to Preview
+          Back
         </Button>
 
-        {status !== 'success' && (
-          <Button size="lg" onClick={handleSubmit} disabled={isProcessing}>
-            {isProcessing ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Processing...
-              </>
-            ) : (
-              'Submit Referendum'
-            )}
+        {status.kind === 'idle' && (
+          <Button size="lg" onClick={handleConnect}>
+            <Wallet className="mr-2 h-4 w-4" />
+            Connect wallet
+          </Button>
+        )}
+
+        {status.kind === 'connecting' && (
+          <Button size="lg" disabled>
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            Connecting…
+          </Button>
+        )}
+
+        {status.kind === 'ready' && (
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-tertiary hidden sm:inline">
+              {status.account.name ?? shortAddress(status.account.address)}
+            </span>
+            <Button size="lg" onClick={handleSubmit}>
+              Submit referendum
+            </Button>
+          </div>
+        )}
+
+        {status.kind === 'submitting' && (
+          <Button size="lg" disabled>
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            {status.step === 'encoding' && 'Encoding…'}
+            {status.step === 'preimage' && 'Noting preimage…'}
+            {status.step === 'referendum' && 'Submitting…'}
+          </Button>
+        )}
+
+        {status.kind === 'error' && (
+          <Button size="lg" onClick={() => setStatus(status.previous)}>
+            Try again
           </Button>
         )}
       </div>
-
-      {/* Implementation Note */}
-      <Alert variant="warning">
-        <AlertTitle>Implementation Note</AlertTitle>
-        <AlertDescription>
-          This is a prototype. Full wallet integration with ReactiveDot/polkadot-api is required
-          for actual submission. The submission flow would involve:
-          <ul className="list-disc list-inside mt-2 space-y-1">
-            <li>Connecting to the Collectives chain via wallet</li>
-            <li>Encoding the single Utility.batch_all call (already generated in preview)</li>
-            <li>Creating and noting a preimage if the call exceeds size limits</li>
-            <li>Submitting via FellowshipReferenda.submit on the Architects track</li>
-            <li>Signing and broadcasting the transaction</li>
-            <li>Monitoring events for referendum ID</li>
-          </ul>
-          <p className="mt-2">
-            The batch contents depend on the selected mode — transfer + DCA start, periodic returns,
-            or the full three-call flow — all executed via a single Collectives referendum.
-          </p>
-        </AlertDescription>
-      </Alert>
     </div>
   );
+}
+
+function SummaryRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex justify-between py-3 first:pt-0 last:pb-0">
+      <span className="text-sm text-secondary">{label}</span>
+      <span className="text-sm font-medium text-primary">{value}</span>
+    </div>
+  );
+}
+
+function SubmissionStatus({ status }: { status: Status }) {
+  if (status.kind === 'idle') {
+    return (
+      <Alert>
+        <AlertTitle>Ready to submit</AlertTitle>
+        <AlertDescription>
+          Connecting your wallet will sign one transaction (or two if the call exceeds 10 KB and a preimage is needed first).
+        </AlertDescription>
+      </Alert>
+    );
+  }
+
+  if (status.kind === 'submitting') {
+    const stepCopy: Record<typeof status.step, { title: string; body: string }> = {
+      encoding: {
+        title: 'Encoding the proposal',
+        body: 'Constructing the batched call.',
+      },
+      preimage: {
+        title: 'Noting the preimage',
+        body: 'The proposal call is larger than 10 KB; storing it on-chain first. Sign in your wallet.',
+      },
+      referendum: {
+        title: 'Submitting the referendum',
+        body: 'Sign in your wallet to submit on the Architects track.',
+      },
+    };
+    const copy = stepCopy[status.step];
+    return (
+      <Alert>
+        <div className="flex items-start gap-2">
+          <Loader2 className="h-4 w-4 mt-0.5 animate-spin text-secondary" />
+          <div>
+            <AlertTitle>{copy.title}</AlertTitle>
+            <AlertDescription>{copy.body}</AlertDescription>
+          </div>
+        </div>
+      </Alert>
+    );
+  }
+
+  if (status.kind === 'success') {
+    return (
+      <Alert variant="success">
+        <div className="flex items-start gap-2">
+          <CheckCircle2 className="h-4 w-4 mt-0.5 text-success" />
+          <div>
+            <AlertTitle>Referendum #{status.referendumId} submitted</AlertTitle>
+            <AlertDescription>
+              The proposal is on-chain. Place the Decision Deposit to start voting.
+            </AlertDescription>
+          </div>
+        </div>
+      </Alert>
+    );
+  }
+
+  if (status.kind === 'error') {
+    return (
+      <Alert variant="error">
+        <div className="flex items-start gap-2">
+          <AlertCircle className="h-4 w-4 mt-0.5 text-error" />
+          <div>
+            <AlertTitle>Submission failed</AlertTitle>
+            <AlertDescription>{status.message}</AlertDescription>
+          </div>
+        </div>
+      </Alert>
+    );
+  }
+
+  return null;
+}
+
+function modeLabel(mode: DcaProposal['inputs']['mode']): string {
+  switch (mode) {
+    case 'setup':
+      return 'Setup only';
+    case 'return':
+      return 'Return only';
+    case 'both':
+      return 'Setup + return';
+  }
+}
+
+function formatDispatchError(error: unknown): string {
+  if (!error) return 'Transaction reverted';
+  try {
+    return JSON.stringify(error, (_, v) => (typeof v === 'bigint' ? v.toString() : v));
+  } catch {
+    return 'Transaction reverted';
+  }
 }

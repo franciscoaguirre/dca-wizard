@@ -2,7 +2,7 @@ import * as React from 'react';
 import { cn } from '../../lib/utils';
 
 export interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
-  variant?: 'default' | 'outline' | 'ghost';
+  variant?: 'default' | 'outline' | 'ghost' | 'danger';
   size?: 'default' | 'sm' | 'lg';
 }
 
@@ -11,20 +11,18 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
     return (
       <button
         className={cn(
-          'inline-flex items-center justify-center rounded-lg font-semibold transition-colors shadow-md',
-          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-primary-500',
+          'inline-flex items-center justify-center rounded-small font-semibold transition-colors cursor-pointer',
+          'disabled:opacity-50 disabled:cursor-not-allowed',
           {
-            'bg-primary-400 text-black hover:bg-primary-500 active:bg-primary-600': variant === 'default' && !disabled,
-            'bg-neutral-300 text-neutral-500 cursor-not-allowed': variant === 'default' && disabled,
-            'border-2 border-neutral-300 bg-white text-neutral-900 hover:bg-neutral-100': variant === 'outline' && !disabled,
-            'border-2 border-neutral-200 bg-neutral-100 text-neutral-400 cursor-not-allowed': variant === 'outline' && disabled,
-            'text-neutral-900 hover:bg-neutral-100': variant === 'ghost' && !disabled,
-            'text-neutral-400 cursor-not-allowed': variant === 'ghost' && disabled,
+            'bg-action-primary text-primary-inverted hover:bg-action-primary-hover': variant === 'default',
+            'bg-action-secondary text-primary hover:bg-action-secondary-hover': variant === 'outline',
+            'bg-transparent text-primary hover:bg-selection-container-hover': variant === 'ghost',
+            'bg-status-error text-primary-inverted hover:bg-status-error-hover': variant === 'danger',
           },
           {
-            'px-5 py-2.5': size === 'default',
-            'px-4 py-2 text-sm': size === 'sm',
-            'px-8 py-3 text-lg': size === 'lg',
+            'px-5 py-2.5 text-sm': size === 'default',
+            'px-3 py-1.5 text-xs': size === 'sm',
+            'px-6 py-3 text-base': size === 'lg',
           },
           className
         )}
