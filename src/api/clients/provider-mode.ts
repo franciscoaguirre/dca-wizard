@@ -1,6 +1,6 @@
 /**
- * Provider mode: choose between smoldot light client (default) and a direct
- * WebSocket RPC. Persisted to localStorage so the choice survives reloads.
+ * Provider mode: choose between WebSocket RPC (default) and the smoldot light
+ * client. Persisted to localStorage so the choice survives reloads.
  *
  * On change, all chain client modules disconnect themselves; the next caller
  * to `getXxxApi()` recreates the client with the new provider.
@@ -13,8 +13,8 @@ export type ProviderMode = 'smoldot' | 'ws';
 const STORAGE_KEY = 'dca-wizard:provider-mode';
 
 function readInitialMode(): ProviderMode {
-  if (typeof window === 'undefined') return 'smoldot';
-  return window.localStorage.getItem(STORAGE_KEY) === 'ws' ? 'ws' : 'smoldot';
+  if (typeof window === 'undefined') return 'ws';
+  return window.localStorage.getItem(STORAGE_KEY) === 'smoldot' ? 'smoldot' : 'ws';
 }
 
 const mode$ = new BehaviorSubject<ProviderMode>(readInitialMode());
