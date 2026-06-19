@@ -21,6 +21,7 @@ import-storage:
         - providers: 1
           data:
             free: '100000000000000000' # 10,000,000 DOT
+      # Fund Fellowship treasury account
       - - - 13w7NdvSR1Af8xsQTArDtZmVvjE8XhWNdL4yed3iFHrUNCnS
         - providers: 1
           data:

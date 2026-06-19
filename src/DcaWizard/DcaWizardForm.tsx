@@ -14,6 +14,7 @@ import { Button } from '../components/ui/button';
 import { Alert, AlertDescription, AlertTitle } from '../components/ui/alert';
 import { Slider } from '../components/ui/slider';
 import { TreasurySnapshot } from '../components/TreasurySnapshot';
+import { DcaStatus } from '../components/DcaStatus';
 import { ArrowDown } from 'lucide-react';
 import { useDotPrice } from '../api/price';
 import { useEffect } from 'react';
@@ -62,6 +63,8 @@ export function DcaWizardForm({ state, dispatch, onNext }: DcaWizardFormProps) {
   return (
     <form onSubmit={handleSubmit} className="space-y-5">
       <TreasurySnapshot />
+
+      <DcaStatus />
 
       {/* Mode selector */}
       <Card>
