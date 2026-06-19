@@ -12,12 +12,15 @@ import {
 } from '../api/dca-status';
 import { DECIMALS, TIMING } from '../api/constants';
 
-function formatDot(amount: bigint): string {
-  const divisor = 10n ** BigInt(DECIMALS.DOT);
+function formatAmount(amount: bigint, decimals: number): string {
+  const divisor = 10n ** BigInt(decimals);
   const whole = (amount / divisor).toLocaleString();
-  const frac = (amount % divisor).toString().padStart(DECIMALS.DOT, '0').slice(0, 2);
+  const frac = (amount % divisor).toString().padStart(decimals, '0').slice(0, 2);
   return `${whole}.${frac}`;
 }
+
+const formatDot = (amount: bigint) => formatAmount(amount, DECIMALS.DOT);
+const formatHollar = (amount: bigint) => formatAmount(amount, DECIMALS.HOLLAR);
 
 /** Human "~N min / hr / days" from a block delta, using the chain block time. */
 function formatBlockDelta(blocks: number): string {
@@ -32,6 +35,7 @@ export function DcaStatus() {
 
   const active =
     (hydration?.schedules.length ?? 0) > 0 || (collectives?.returns.length ?? 0) > 0;
+  const dcaIds = hydration?.schedules.map((s) => s.id) ?? [];
 
   return (
     <Card>
@@ -43,12 +47,21 @@ export function DcaStatus() {
           ) : !loading ? (
             <span className="text-xs text-tertiary">
               {active ? 'Ongoing DCA detected' : 'No ongoing DCA'}
+              {dcaIds.length > 0 && (
+                <span className="ml-1.5 text-secondary font-medium tabular-nums">
+                  {dcaIds.map((id) => `#${id}`).join(', ')}
+                </span>
+              )}
             </span>
           ) : null}
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <HydrationColumn status={hydration} loading={loading} />
-          <CollectivesColumn status={collectives} loading={loading} />
+          <CollectivesColumn
+            status={collectives}
+            hollarAccumulated={hydration?.hollarAccumulated ?? null}
+            loading={loading}
+          />
         </div>
       </CardContent>
     </Card>
@@ -93,7 +106,6 @@ function HydrationColumn({
             return (
               <div key={s.id} className="text-sm text-secondary space-y-0.5">
                 <p className="text-primary font-medium tabular-nums">
-                  <span className="text-tertiary font-normal">DCA #{s.id} · </span>
                   {formatDot(s.amountPerTrade)} DOT → HOLLAR
                   <span className="text-tertiary font-normal">
                     {' '}every {formatBlockDelta(s.period)}
@@ -115,42 +127,56 @@ function HydrationColumn({
 
 function CollectivesColumn({
   status,
+  hollarAccumulated,
   loading,
 }: {
   status: CollectivesReturnStatus | null;
+  hollarAccumulated: bigint | null;
   loading: boolean;
 }) {
   return (
     <ColumnShell title="Collectives — scheduled returns">
       {loading && !status ? (
         <Skeleton />
-      ) : !status || status.returns.length === 0 ? (
-        <span className="text-sm text-secondary">No scheduled returns</span>
       ) : (
-        (() => {
-          const next = status.returns[0];
-          const blocksAway = next.block - status.currentBlock;
-          // A periodic task is one agenda entry but `remaining` future runs; a
-          // one-off task is a single cash-out. Sum to get the true count.
-          const totalCashouts = status.returns.reduce(
-            (n, r) => n + (r.remaining ?? 1),
-            0,
-          );
-          return (
-            <div className="text-sm text-secondary space-y-0.5">
-              <p className="text-primary font-medium">
-                {totalCashouts} scheduled cash-out{totalCashouts === 1 ? '' : 's'}
-              </p>
-              <p className="text-tertiary tabular-nums">
-                next at block {next.block.toLocaleString()}
-                {blocksAway > 0 ? ` (${formatBlockDelta(blocksAway)})` : ''}
-                {next.periodBlocks != null
-                  ? ` · every ${formatBlockDelta(next.periodBlocks)}`
-                  : ''}
-              </p>
-            </div>
-          );
-        })()
+        <div className="text-sm text-secondary space-y-2">
+          {hollarAccumulated != null && (
+            <p className="tabular-nums">
+              <span className="text-primary font-medium">
+                {formatHollar(hollarAccumulated)} HOLLAR
+              </span>{' '}
+              accumulated · cashed out next return
+            </p>
+          )}
+          {!status || status.returns.length === 0 ? (
+            <p className="text-secondary">No scheduled returns</p>
+          ) : (
+            (() => {
+              const next = status.returns[0];
+              const blocksAway = next.block - status.currentBlock;
+              // A periodic task is one agenda entry but `remaining` future runs;
+              // a one-off task is a single cash-out. Sum to get the true count.
+              const totalCashouts = status.returns.reduce(
+                (n, r) => n + (r.remaining ?? 1),
+                0,
+              );
+              return (
+                <div className="space-y-0.5">
+                  <p className="text-primary font-medium">
+                    {totalCashouts} scheduled cash-out{totalCashouts === 1 ? '' : 's'}
+                  </p>
+                  <p className="text-tertiary tabular-nums">
+                    next at block {next.block.toLocaleString()}
+                    {blocksAway > 0 ? ` (${formatBlockDelta(blocksAway)})` : ''}
+                    {next.periodBlocks != null
+                      ? ` · every ${formatBlockDelta(next.periodBlocks)}`
+                      : ''}
+                  </p>
+                </div>
+              );
+            })()
+          )}
+        </div>
       )}
     </ColumnShell>
   );

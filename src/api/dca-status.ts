@@ -38,6 +38,11 @@ export interface HydrationDcaStatus {
    * is the real "DOT left to convert", not `DCA.RemainingAmounts`.
    */
   dotRemaining: bigint;
+  /**
+   * Owner's free HOLLAR balance on Hydration (asset_out) — the proceeds the DCA
+   * has accumulated so far, i.e. what the next return will cash out.
+   */
+  hollarAccumulated: bigint;
   currentBlock: number;
 }
 
@@ -86,12 +91,16 @@ export async function fetchHydrationDcaStatus(
   const hollarId = HYDRATION_ASSETS[network].HOLLAR;
   const dotId = HYDRATION_ASSETS[network].DOT;
 
-  const [currentBlock, ownership, dotAccount] = await Promise.all([
+  const [currentBlock, ownership, dotRemaining, hollarAccumulated] = await Promise.all([
     api.query.System.Number.getValue(),
     // Partial-key prefix on the owner of the [owner, scheduleId] NMap.
     api.query.DCA.ScheduleOwnership.getEntries(owner),
-    // Owner's DOT (asset_in) balance — the real budget the DCA draws down.
-    api.query.Tokens.Accounts.getValue(owner, dotId),
+    // Owner balances via CurrenciesApi: HOLLAR is Aave-backed, so its true free
+    // balance comes from the runtime API, not a raw Tokens.Accounts read.
+    // DOT (asset_in) — the real budget the DCA draws down.
+    api.apis.CurrenciesApi.free_balance(dotId, owner),
+    // HOLLAR (asset_out) — proceeds accumulated so far.
+    api.apis.CurrenciesApi.free_balance(hollarId, owner),
   ]);
 
   const ids = ownership.map(
@@ -120,7 +129,7 @@ export async function fetchHydrationDcaStatus(
   );
 
   schedules.sort((a, b) => a.id - b.id);
-  return { owner, schedules, dotRemaining: dotAccount?.free ?? 0n, currentBlock };
+  return { owner, schedules, dotRemaining, hollarAccumulated, currentBlock };
 }
 
 /**
