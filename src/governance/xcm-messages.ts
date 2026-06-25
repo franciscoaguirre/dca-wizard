@@ -228,6 +228,9 @@ export function buildSetupXcm(
  * sufficient asset) with `providers=0` — `pallet-balances` rejects a DOT
  * credit to such an account, which would also fail the HOLLAR transfer in the
  * same instruction.
+ *
+ * A 0% or 100% split collapses to a single sweeping deposit (Wild AllOf HOLLAR)
+ * to the sole beneficiary: we never emit a Definite Fungible(0) leg.
  */
 export function buildPeriodicReturnXcm(
   network: NetworkType,
@@ -249,6 +252,42 @@ export function buildPeriodicReturnXcm(
   const hollarAssetId = hollarAssetIdV5(network);
 
   const hollarTreasury = (hollarAmountPerReturn * BigInt(treasurySplitPercent)) / 100n;
+  const hollarSalary = hollarAmountPerReturn - hollarTreasury;
+
+  // HOLLAR-only Wild filter: sweeps the entire HOLLAR balance to the beneficiary.
+  // Any leftover DOT after AH-fee execution traps (see header comment).
+  const sweepHollarTo = (beneficiaryId: Uint8Array) =>
+    XcmV5Instruction.DepositAsset({
+      assets: XcmV5AssetFilter.Wild(
+        XcmV5WildAsset.AllOf({
+          id: hollarAssetId,
+          fun: XcmV2MultiassetWildFungibility.Fungible(),
+        }),
+      ),
+      beneficiary: accountOnAssetHubV5(beneficiaryId),
+    });
+
+  // Build the AH-side deposit legs, omitting any beneficiary whose share is zero so
+  // we never emit a Definite Fungible(0). A 0%/100% split collapses to a single
+  // sweeping deposit; otherwise the Treasury takes a Definite amount and the Salary
+  // sweeps the remainder.
+  const deposits =
+    hollarTreasury > 0n && hollarSalary > 0n
+      ? [
+          XcmV5Instruction.DepositAsset({
+            assets: XcmV5AssetFilter.Definite([
+              {
+                id: hollarAssetId,
+                fun: XcmV3MultiassetFungibility.Fungible(hollarTreasury),
+              },
+            ]),
+            beneficiary: accountOnAssetHubV5(FELLOWSHIP_TREASURY_ID),
+          }),
+          sweepHollarTo(FELLOWSHIP_SALARY_ID),
+        ]
+      : hollarSalary === 0n
+        ? [sweepHollarTo(FELLOWSHIP_TREASURY_ID)]
+        : [sweepHollarTo(FELLOWSHIP_SALARY_ID)];
 
   return XcmVersionedXcm.V5([
     XcmV5Instruction.AliasOrigin(ftLocation),
@@ -314,27 +353,7 @@ export function buildPeriodicReturnXcm(
               ]),
             ),
           ],
-          remote_xcm: [
-            XcmV5Instruction.DepositAsset({
-              assets: XcmV5AssetFilter.Definite([
-                {
-                  id: hollarAssetId,
-                  fun: XcmV3MultiassetFungibility.Fungible(hollarTreasury),
-                },
-              ]),
-              beneficiary: accountOnAssetHubV5(FELLOWSHIP_TREASURY_ID),
-            }),
-            // HOLLAR remainder only — DOT dust traps (see header comment).
-            XcmV5Instruction.DepositAsset({
-              assets: XcmV5AssetFilter.Wild(
-                XcmV5WildAsset.AllOf({
-                  id: hollarAssetId,
-                  fun: XcmV2MultiassetWildFungibility.Fungible(),
-                }),
-              ),
-              beneficiary: accountOnAssetHubV5(FELLOWSHIP_SALARY_ID),
-            }),
-          ],
+          remote_xcm: deposits,
         }),
       ],
     }),
