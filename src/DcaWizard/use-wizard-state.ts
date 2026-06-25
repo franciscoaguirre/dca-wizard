@@ -17,6 +17,7 @@ import {
   buildDcaProposal,
 } from '../governance/builder';
 import { calculateNumberOfReturns } from '../governance/periodic-return';
+import { applyParamsToState, buildSearchParams } from './share-url';
 
 /**
  * Form State
@@ -337,10 +338,43 @@ function wizardReducer(state: WizardState, action: WizardAction): WizardState {
 }
 
 /**
+ * Hydrate initial state from the URL query params so a shared link lands on a
+ * pre-filled form. Runs synchronously in the reducer's lazy initializer, so the
+ * form renders filled on first paint and the auto-build effect picks it up.
+ */
+function initFromUrl(): WizardState {
+  if (typeof window === 'undefined') return initialState;
+  const merged = applyParamsToState(window.location.search, initialState);
+  return { ...merged, errors: validateAllFields(merged) };
+}
+
+/**
  * Hook
  */
 export function useWizardState() {
-  const [state, dispatch] = useReducer(wizardReducer, initialState);
+  const [state, dispatch] = useReducer(wizardReducer, initialState, initFromUrl);
+
+  // Keep the address bar in sync with the form so the URL is always a
+  // shareable record of the config. replaceState (not pushState) avoids
+  // polluting browser history on every keystroke.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const qs = buildSearchParams(state);
+    const url = qs ? `${window.location.pathname}?${qs}` : window.location.pathname;
+    window.history.replaceState(null, '', url);
+  }, [
+    state.network,
+    state.mode,
+    state.dotAmount,
+    state.hollarAmountPerReturn,
+    state.dcaFrequencyBlocks,
+    state.dcaDurationDays,
+    state.slippagePercent,
+    state.returnFrequencyDays,
+    state.returnFrequencyUnit,
+    state.numberOfReturns,
+    state.treasurySplitPercent,
+  ]);
 
   // Auto-build proposal when inputs change (debounced)
   useEffect(() => {
