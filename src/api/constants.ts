@@ -122,7 +122,7 @@ export const CHAIN_ENDPOINTS = {
   polkadot: {
     RELAY: 'wss://polkadot-rpc.dwellir.com',
     ASSET_HUB: 'wss://polkadot-asset-hub-rpc.polkadot.io',
-    HYDRATION: 'wss://rpc.hydradx.cloud',
+    HYDRATION: 'wss://hydration-rpc.n.dwellir.com',
     COLLECTIVES: 'wss://polkadot-collectives-rpc.polkadot.io',
   },
   paseo: {
