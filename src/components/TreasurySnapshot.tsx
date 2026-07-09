@@ -25,23 +25,28 @@ function formatBalance(amount: bigint, decimals: number): string {
   return `${wholeStr}.${fracStr}`;
 }
 
-export function TreasurySnapshot() {
-  const { treasury, salary, loading, error } = useTreasuryBalances('polkadot');
+export function TreasurySnapshot({ bare = false }: { bare?: boolean }) {
+  const { mainTreasury, treasury, salary, loading, error } = useTreasuryBalances('polkadot');
+
+  const body = (
+    <>
+      <div className="flex items-baseline justify-between mb-4">
+        <h2 className="text-base font-semibold text-primary">Treasury balances</h2>
+        {error && <span className="text-xs text-tertiary">Balances unavailable</span>}
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <AccountColumn name="Main Treasury" balances={mainTreasury} loading={loading} />
+        <AccountColumn name="Fellowship Treasury" balances={treasury} loading={loading} />
+        <AccountColumn name="Fellowship Salary" balances={salary} loading={loading} />
+      </div>
+    </>
+  );
+
+  if (bare) return body;
 
   return (
     <Card>
-      <CardContent className="pt-6">
-        <div className="flex items-baseline justify-between mb-4">
-          <h2 className="text-base font-semibold text-primary">Treasury & Salary balances</h2>
-          {error && (
-            <span className="text-xs text-tertiary">Balances unavailable</span>
-          )}
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <AccountColumn name="Fellowship Treasury" balances={treasury} loading={loading} />
-          <AccountColumn name="Fellowship Salary" balances={salary} loading={loading} />
-        </div>
-      </CardContent>
+      <CardContent className="pt-6">{body}</CardContent>
     </Card>
   );
 }

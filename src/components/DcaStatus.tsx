@@ -30,40 +30,46 @@ function formatBlockDelta(blocks: number): string {
   return `~${(seconds / 86_400).toFixed(1)} days`;
 }
 
-export function DcaStatus() {
+export function DcaStatus({ bare = false }: { bare?: boolean }) {
   const { hydration, collectives, loading, error } = useFellowshipDcaStatus('polkadot');
 
   const active =
     (hydration?.schedules.length ?? 0) > 0 || (collectives?.returns.length ?? 0) > 0;
   const dcaIds = hydration?.schedules.map((s) => s.id) ?? [];
 
+  const body = (
+    <>
+      <div className="flex items-baseline justify-between mb-4">
+        <h2 className="text-base font-semibold text-primary">Active Fellowship DCA</h2>
+        {error ? (
+          <span className="text-xs text-tertiary">Status unavailable</span>
+        ) : !loading ? (
+          <span className="text-xs text-tertiary">
+            {active ? 'Ongoing DCA detected' : 'No ongoing DCA'}
+            {dcaIds.length > 0 && (
+              <span className="ml-1.5 text-secondary font-medium tabular-nums">
+                {dcaIds.map((id) => `#${id}`).join(', ')}
+              </span>
+            )}
+          </span>
+        ) : null}
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <HydrationColumn status={hydration} loading={loading} />
+        <CollectivesColumn
+          status={collectives}
+          hollarAccumulated={hydration?.hollarAccumulated ?? null}
+          loading={loading}
+        />
+      </div>
+    </>
+  );
+
+  if (bare) return body;
+
   return (
     <Card>
-      <CardContent className="pt-6">
-        <div className="flex items-baseline justify-between mb-4">
-          <h2 className="text-base font-semibold text-primary">Active Fellowship DCA</h2>
-          {error ? (
-            <span className="text-xs text-tertiary">Status unavailable</span>
-          ) : !loading ? (
-            <span className="text-xs text-tertiary">
-              {active ? 'Ongoing DCA detected' : 'No ongoing DCA'}
-              {dcaIds.length > 0 && (
-                <span className="ml-1.5 text-secondary font-medium tabular-nums">
-                  {dcaIds.map((id) => `#${id}`).join(', ')}
-                </span>
-              )}
-            </span>
-          ) : null}
-        </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <HydrationColumn status={hydration} loading={loading} />
-          <CollectivesColumn
-            status={collectives}
-            hollarAccumulated={hydration?.hollarAccumulated ?? null}
-            loading={loading}
-          />
-        </div>
-      </CardContent>
+      <CardContent className="pt-6">{body}</CardContent>
     </Card>
   );
 }
