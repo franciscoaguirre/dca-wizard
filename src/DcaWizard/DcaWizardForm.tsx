@@ -100,8 +100,8 @@ export function DcaWizardForm({ state, dispatch, onNext }: DcaWizardFormProps) {
 
       {/* ② DCA */}
       <Card>
-        <CardContent className="pt-6">
-          <div className="flex items-center justify-between mb-4">
+        <CardContent className="pt-6 space-y-6">
+          <div className="flex items-center justify-between">
             <div>
               <h2 className="text-base font-semibold text-primary">2. DCA</h2>
               <p className="text-xs text-secondary">Convert DOT to HOLLAR over time on Hydration.</p>
@@ -116,20 +116,15 @@ export function DcaWizardForm({ state, dispatch, onNext }: DcaWizardFormProps) {
               Set up a DCA
             </label>
           </div>
+
           {!state.dcaEnabled && (
             <p className="text-xs text-tertiary">
               DCA is off — this proposal will only schedule returns (e.g. to sweep leftover HOLLAR).
             </p>
           )}
-        </CardContent>
-      </Card>
 
-      {/* Setup section */}
-      {showSetup && (
-        <>
-          <Card>
-            <CardContent className="pt-6">
-              <h2 className="text-base font-semibold text-primary mb-4">Convert DOT to HOLLAR</h2>
+          {showSetup && (
+            <>
               <div className="space-y-3">
                 <div className="space-y-2">
                   <Label className="text-xs text-tertiary uppercase tracking-wide">You're converting</Label>
@@ -180,108 +175,106 @@ export function DcaWizardForm({ state, dispatch, onNext }: DcaWizardFormProps) {
                   </div>
                 </div>
               </div>
-            </CardContent>
-          </Card>
 
-          <Card>
-            <CardContent className="pt-6">
-              <h2 className="text-base font-semibold text-primary mb-4">DCA configuration</h2>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="dcaFrequency">Frequency</Label>
-                  <div className="flex items-center gap-2">
-                    <NumberInput
-                      id="dcaFrequency"
-                      min="10"
-                      value={state.dcaFrequencyBlocks}
-                      parse={(s) => parseInt(s, 10)}
-                      onChange={(val) =>
-                        dispatch({ type: 'SET_DCA_FREQUENCY', payload: val })
-                      }
-                      className="w-full"
-                    />
-                    <span className="text-xs text-tertiary whitespace-nowrap">blocks</span>
-                  </div>
-                  <p className="text-xs text-tertiary">
-                    ≈ {Math.round((state.dcaFrequencyBlocks * 6) / 60)} min
-                  </p>
-                  {state.errors.dcaFrequencyBlocks && (
-                    <p className="text-xs text-error">{state.errors.dcaFrequencyBlocks}</p>
-                  )}
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="dcaDuration">Duration</Label>
-                  <div className="flex items-center gap-2">
-                    <NumberInput
-                      id="dcaDuration"
-                      min="1"
-                      value={state.dcaDurationDays}
-                      parse={(s) => parseInt(s, 10)}
-                      onChange={(val) =>
-                        dispatch({ type: 'SET_DCA_DURATION', payload: val })
-                      }
-                      className="w-full"
-                    />
-                    <span className="text-xs text-tertiary whitespace-nowrap">days</span>
-                  </div>
-                  {state.errors.dcaDurationDays && (
-                    <p className="text-xs text-error">{state.errors.dcaDurationDays}</p>
-                  )}
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="slippage">Slippage</Label>
-                  <div className="flex items-center gap-2">
-                    <NumberInput
-                      id="slippage"
-                      min="0.1"
-                      max="10"
-                      step="0.1"
-                      value={state.slippagePercent}
-                      onChange={(val) =>
-                        dispatch({ type: 'SET_SLIPPAGE', payload: val })
-                      }
-                      className="w-full"
-                    />
-                    <span className="text-xs text-tertiary">%</span>
-                  </div>
-                  {state.errors.slippagePercent && (
-                    <p className="text-xs text-error">{state.errors.slippagePercent}</p>
-                  )}
-                </div>
-
-                <div className="space-y-2">
-                  <Label>Total trades</Label>
-                  <div className="pt-1.5">
-                    <p className="text-base font-semibold text-primary">
-                      {state.proposal?.calculations?.totalTrades?.toLocaleString() ?? '—'}
+              <div>
+                <h3 className="text-sm font-semibold text-primary mb-4">DCA configuration</h3>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="dcaFrequency">Frequency</Label>
+                    <div className="flex items-center gap-2">
+                      <NumberInput
+                        id="dcaFrequency"
+                        min="10"
+                        value={state.dcaFrequencyBlocks}
+                        parse={(s) => parseInt(s, 10)}
+                        onChange={(val) =>
+                          dispatch({ type: 'SET_DCA_FREQUENCY', payload: val })
+                        }
+                        className="w-full"
+                      />
+                      <span className="text-xs text-tertiary whitespace-nowrap">blocks</span>
+                    </div>
+                    <p className="text-xs text-tertiary">
+                      ≈ {Math.round((state.dcaFrequencyBlocks * 6) / 60)} min
                     </p>
-                    {state.proposal?.calculations?.dotPerTrade != null && (
-                      <p className="text-xs text-tertiary">
-                        {(Number(state.proposal.calculations.dotPerTrade) / 1e10).toFixed(2)} DOT each
-                      </p>
+                    {state.errors.dcaFrequencyBlocks && (
+                      <p className="text-xs text-error">{state.errors.dcaFrequencyBlocks}</p>
                     )}
-                    {state.proposal?.calculations?.estimatedHollarTotal != null &&
-                      (state.proposal.calculations.totalTrades ?? 0) > 0 && (
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="dcaDuration">Duration</Label>
+                    <div className="flex items-center gap-2">
+                      <NumberInput
+                        id="dcaDuration"
+                        min="1"
+                        value={state.dcaDurationDays}
+                        parse={(s) => parseInt(s, 10)}
+                        onChange={(val) =>
+                          dispatch({ type: 'SET_DCA_DURATION', payload: val })
+                        }
+                        className="w-full"
+                      />
+                      <span className="text-xs text-tertiary whitespace-nowrap">days</span>
+                    </div>
+                    {state.errors.dcaDurationDays && (
+                      <p className="text-xs text-error">{state.errors.dcaDurationDays}</p>
+                    )}
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="slippage">Slippage</Label>
+                    <div className="flex items-center gap-2">
+                      <NumberInput
+                        id="slippage"
+                        min="0.1"
+                        max="10"
+                        step="0.1"
+                        value={state.slippagePercent}
+                        onChange={(val) =>
+                          dispatch({ type: 'SET_SLIPPAGE', payload: val })
+                        }
+                        className="w-full"
+                      />
+                      <span className="text-xs text-tertiary">%</span>
+                    </div>
+                    {state.errors.slippagePercent && (
+                      <p className="text-xs text-error">{state.errors.slippagePercent}</p>
+                    )}
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label>Total trades</Label>
+                    <div className="pt-1.5">
+                      <p className="text-base font-semibold text-primary">
+                        {state.proposal?.calculations?.totalTrades?.toLocaleString() ?? '—'}
+                      </p>
+                      {state.proposal?.calculations?.dotPerTrade != null && (
                         <p className="text-xs text-tertiary">
-                          ≈ {formatHollarShort(
-                            state.proposal.calculations.estimatedHollarTotal /
-                              BigInt(state.proposal.calculations.totalTrades),
-                          )} HOLLAR each
+                          {(Number(state.proposal.calculations.dotPerTrade) / 1e10).toFixed(2)} DOT each
                         </p>
                       )}
+                      {state.proposal?.calculations?.estimatedHollarTotal != null &&
+                        (state.proposal.calculations.totalTrades ?? 0) > 0 && (
+                          <p className="text-xs text-tertiary">
+                            ≈ {formatHollarShort(
+                              state.proposal.calculations.estimatedHollarTotal /
+                                BigInt(state.proposal.calculations.totalTrades),
+                            )} HOLLAR each
+                          </p>
+                        )}
+                    </div>
                   </div>
                 </div>
               </div>
-            </CardContent>
-          </Card>
-        </>
-      )}
+            </>
+          )}
+        </CardContent>
+      </Card>
 
       {/* ③ Destination */}
       <Card>
-        <CardContent className="pt-6">
+        <CardContent className="pt-6 space-y-6">
           <div className="flex items-center justify-between">
             <div>
               <h2 className="text-base font-semibold text-primary">3. Destination</h2>
@@ -297,64 +290,59 @@ export function DcaWizardForm({ state, dispatch, onNext }: DcaWizardFormProps) {
               Automatic returns
             </label>
           </div>
-        </CardContent>
-      </Card>
 
-      {showReturn && (
-        <>
-          {state.mode === 'return' && (
-            <Card>
-              <CardContent className="pt-6">
-                <h2 className="text-base font-semibold text-primary mb-4">Return amount</h2>
-                <div className="space-y-2">
-                  <Label htmlFor="hollarPerReturn">HOLLAR per return</Label>
-                  <div className="flex items-center gap-2">
-                    <Input
-                      id="hollarPerReturn"
-                      type="text"
-                      placeholder="0"
-                      value={state.hollarAmountPerReturn}
-                      onChange={(e) =>
-                        dispatch({ type: 'SET_HOLLAR_PER_RETURN', payload: e.target.value })
-                      }
-                      onBlur={() =>
-                        dispatch({ type: 'SET_FIELD_TOUCHED', payload: 'hollarAmountPerReturn' })
-                      }
-                      className="w-full"
-                    />
-                    <span className="text-xs text-tertiary whitespace-nowrap">HOLLAR</span>
+          {showReturn && (
+            <>
+              {state.mode === 'return' && (
+                <div>
+                  <h3 className="text-sm font-semibold text-primary mb-2">Return amount</h3>
+                  <div className="space-y-2">
+                    <Label htmlFor="hollarPerReturn">HOLLAR per return</Label>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        id="hollarPerReturn"
+                        type="text"
+                        placeholder="0"
+                        value={state.hollarAmountPerReturn}
+                        onChange={(e) =>
+                          dispatch({ type: 'SET_HOLLAR_PER_RETURN', payload: e.target.value })
+                        }
+                        onBlur={() =>
+                          dispatch({ type: 'SET_FIELD_TOUCHED', payload: 'hollarAmountPerReturn' })
+                        }
+                        className="w-full"
+                      />
+                      <span className="text-xs text-tertiary whitespace-nowrap">HOLLAR</span>
+                    </div>
+                    <p className="text-xs text-tertiary">
+                      Amount of HOLLAR to withdraw from the Fellowship Treasury sovereign on Hydration each return.
+                    </p>
+                    {state.touched.hollarAmountPerReturn && state.errors.hollarAmountPerReturn && (
+                      <p className="text-xs text-error">{state.errors.hollarAmountPerReturn}</p>
+                    )}
                   </div>
-                  <p className="text-xs text-tertiary">
-                    Amount of HOLLAR to withdraw from the Fellowship Treasury sovereign on Hydration each return.
-                  </p>
-                  {state.touched.hollarAmountPerReturn && state.errors.hollarAmountPerReturn && (
-                    <p className="text-xs text-error">{state.errors.hollarAmountPerReturn}</p>
-                  )}
                 </div>
-              </CardContent>
-            </Card>
-          )}
+              )}
 
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-base font-semibold text-primary">Periodic returns</h2>
-                <label className="flex items-center gap-2 text-xs text-tertiary cursor-pointer select-none">
-                  <input
-                    type="checkbox"
-                    checked={state.returnFrequencyUnit === 'blocks'}
-                    onChange={(e) =>
-                      dispatch({
-                        type: 'SET_RETURN_FREQUENCY_UNIT',
-                        payload: e.target.checked ? 'blocks' : 'days',
-                      })
-                    }
-                    className="h-3.5 w-3.5 rounded border cursor-pointer"
-                  />
-                  Test mode (blocks)
-                </label>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div>
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-sm font-semibold text-primary">Periodic returns</h3>
+                  <label className="flex items-center gap-2 text-xs text-tertiary cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={state.returnFrequencyUnit === 'blocks'}
+                      onChange={(e) =>
+                        dispatch({
+                          type: 'SET_RETURN_FREQUENCY_UNIT',
+                          payload: e.target.checked ? 'blocks' : 'days',
+                        })
+                      }
+                      className="h-3.5 w-3.5 rounded border cursor-pointer"
+                    />
+                    Test mode (blocks)
+                  </label>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label htmlFor="returnFrequency">Return frequency</Label>
                   <div className="flex items-center gap-2">
@@ -466,40 +454,39 @@ export function DcaWizardForm({ state, dispatch, onNext }: DcaWizardFormProps) {
                       The Fellowship Treasury sovereign on Hydration must hold at least this total before the first return executes.
                     </p>
                   )}
-                </div>
-              )}
-            </CardContent>
-          </Card>
+                  </div>
+                )}
+              </div>
 
-          <Card>
-            <CardContent className="pt-6">
-              <h2 className="text-base font-semibold text-primary mb-4">Beneficiary split</h2>
-              <div className="space-y-4">
-                <div className="flex justify-between text-xs text-secondary">
-                  <span>Fellowship Treasury</span>
-                  <span>Fellowship Salary</span>
-                </div>
+              <div>
+                <h3 className="text-sm font-semibold text-primary mb-4">Beneficiary split</h3>
+                <div className="space-y-4">
+                  <div className="flex justify-between text-xs text-secondary">
+                    <span>Fellowship Treasury</span>
+                    <span>Fellowship Salary</span>
+                  </div>
 
-                <Slider
-                  id="beneficiarySplit"
-                  value={state.treasurySplitPercent}
-                  onChange={(value) =>
-                    dispatch({ type: 'SET_TREASURY_SPLIT', payload: value })
-                  }
-                  min={0}
-                  max={100}
-                  step={1}
-                />
+                  <Slider
+                    id="beneficiarySplit"
+                    value={state.treasurySplitPercent}
+                    onChange={(value) =>
+                      dispatch({ type: 'SET_TREASURY_SPLIT', payload: value })
+                    }
+                    min={0}
+                    max={100}
+                    step={1}
+                  />
 
-                <div className="flex justify-between text-base font-semibold">
-                  <span className="text-primary">{state.treasurySplitPercent}%</span>
-                  <span className="text-primary">{100 - state.treasurySplitPercent}%</span>
+                  <div className="flex justify-between text-base font-semibold">
+                    <span className="text-primary">{state.treasurySplitPercent}%</span>
+                    <span className="text-primary">{100 - state.treasurySplitPercent}%</span>
+                  </div>
                 </div>
               </div>
-            </CardContent>
-          </Card>
-        </>
-      )}
+            </>
+          )}
+        </CardContent>
+      </Card>
 
       {hasErrors && (
         <Alert variant="error">
