@@ -12,19 +12,22 @@
  * entity as the FT pallet on Collectives (and as the AliasOrigin target on AH).
  */
 
-import type { NetworkType, ProposalMode } from '../api/constants';
+import type { NetworkType, ProposalMode, ProposalOrigin } from '../api/constants';
 import {
   DEFAULTS,
   PER_HOP_FEE_PLANCK,
   daysToBlocks,
   getParachainId,
+  ACCOUNTS,
 } from '../api/constants';
-import { XcmVersionedLocation } from '@polkadot-api/descriptors';
+import { XcmVersionedLocation, MultiAddress } from '@polkadot-api/descriptors';
 import { getCollectivesApi } from '../api/clients/collectives';
+import { getAssetHubApi } from '../api/clients/dotAh';
 import {
   buildSetupXcm,
   buildPeriodicReturnXcm,
   parachainLocationV5,
+  fellowshipTreasuryPalletLocationV5,
 } from './xcm-messages';
 import {
   getFellowshipTreasurySovereignOnHydration,
@@ -51,6 +54,9 @@ import {
 export interface DcaWizardInputs {
   network: NetworkType;
   mode: ProposalMode;
+  // Which treasury funds the DCA + which referendum authorizes it. Defaults to
+  // 'fellowship' (the original Collectives Architects flow) when unset.
+  origin?: ProposalOrigin;
 
   // Setup-mode inputs
   dotAmount?: bigint;
@@ -64,6 +70,20 @@ export interface DcaWizardInputs {
   numberOfReturns?: number;
   treasurySplitPercent?: number;
   salarySplitPercent?: number;
+}
+
+/**
+ * Derive the call-composition mode from the two UI toggles.
+ * Returns null for the invalid "nothing selected" combination.
+ */
+export function deriveProposalMode(
+  dcaEnabled: boolean,
+  returnsEnabled: boolean,
+): ProposalMode | null {
+  if (dcaEnabled && returnsEnabled) return 'both';
+  if (dcaEnabled && !returnsEnabled) return 'setup';
+  if (!dcaEnabled && returnsEnabled) return 'return';
+  return null;
 }
 
 /**
@@ -91,6 +111,16 @@ export interface DcaProposal {
     warnings: string[];
   };
 }
+
+// Weight ceiling for the local PolkadotXcm.execute of the setup/return message on
+// Asset Hub. Generous; the exact cost is validated in manual Chopsticks testing.
+const EXECUTE_MAX_WEIGHT = {
+  ref_time: 20_000_000_000n,
+  proof_size: 2_000_000n,
+} as const;
+
+// DOT buffer added to the treasury spend to cover the setup XCM hop fees.
+const SETUP_FEE_BUFFER_PLANCK = PER_HOP_FEE_PLANCK * 2n;
 
 // ---------------------------------------------------------------------------
 // Fee estimates
@@ -270,6 +300,10 @@ export async function encodeBatchCall(
   proposal: DcaProposal,
   dotPriceInUsd: number,
 ): Promise<string> {
+  if ((proposal.inputs.origin ?? 'fellowship') === 'treasury') {
+    return encodeTreasuryBatchCall(proposal, dotPriceInUsd);
+  }
+
   const network = proposal.inputs.network;
   const collectivesApi = await getCollectivesApi(network);
   const assetHubDest = XcmVersionedLocation.V5(
@@ -341,6 +375,129 @@ export async function encodeBatchCall(
 
   const batchCall = collectivesApi.tx.Utility.batch_all({
     calls: txCalls.map((c) => c.decodedCall) as never,
+  });
+  return (await batchCall.getEncodedData()).asHex();
+}
+
+/**
+ * Encode the treasury-origin batch for submission as an OpenGov Root referendum
+ * on Asset Hub. Composition follows the derived mode:
+ *   - setup / both: dispatch_as(Treasury) transfer + dispatch_as(FT) execute(setup)
+ *   - both / return: Scheduler.schedule_after(dispatch_as(FT) execute(return))
+ * A single resulting call is returned directly; 2+ are wrapped in Utility.batch_all.
+ */
+async function encodeTreasuryBatchCall(
+  proposal: DcaProposal,
+  dotPriceInUsd: number,
+): Promise<string> {
+  const network = proposal.inputs.network;
+  const ahApi = await getAssetHubApi(network);
+  const mode = proposal.inputs.mode;
+
+  // pallet_xcm Origin::Xcm(FT pallet location) — Root impersonates the FT pallet
+  // so the executed message needs no leading AliasOrigin.
+  const ftXcmOrigin = {
+    type: 'PolkadotXcm' as const,
+    value: {
+      type: 'Xcm' as const,
+      value: fellowshipTreasuryPalletLocationV5(network),
+    },
+  };
+
+  const treasurySignedOrigin = {
+    type: 'system' as const,
+    value: { type: 'Signed' as const, value: ACCOUNTS.MAIN_TREASURY },
+  };
+
+  const includeSpendAndSetup = mode !== 'return';
+  const includeReturn = mode !== 'setup';
+
+  // Each entry keeps the tx (for the single-call fast path) and its decodedCall
+  // (for batch_all).
+  const txs: Array<{
+    decodedCall: unknown;
+    getEncodedData: () => Promise<{ asHex: () => string }>;
+  }> = [];
+
+  if (includeSpendAndSetup) {
+    // 1) Treasury spend: dispatch_as(Treasury) → transfer DOT to FT account on AH.
+    const spendTx = ahApi.tx.Utility.dispatch_as({
+      as_origin: treasurySignedOrigin as never,
+      call: ahApi.tx.Balances.transfer_keep_alive({
+        dest: MultiAddress.Id(ACCOUNTS.FELLOWSHIP_TREASURY),
+        value: proposal.inputs.dotAmount! + SETUP_FEE_BUFFER_PLANCK,
+      }).decodedCall,
+    });
+    txs.push(spendTx);
+
+    // 2) DCA setup: dispatch_as(FT) → PolkadotXcm.execute(setup XCM, no leading alias).
+    const dotPerTrade = proposal.calculations.dotPerTrade;
+    const dcaParams = calculateDcaParams(
+      network,
+      proposal.calculations.sovereignAccount,
+      proposal.inputs.dcaFrequencyBlocks!,
+      proposal.inputs.slippagePercent!,
+      dotPerTrade,
+      estimateHollarFromDot(dotPerTrade, dotPriceInUsd),
+    );
+    const dcaCallEncoded = await encodeDcaScheduleCall(network, dcaParams);
+    const setupXcm = buildSetupXcm(
+      network,
+      proposal.inputs.dotAmount!,
+      PER_HOP_FEE_PLANCK,
+      dcaCallEncoded,
+      false,
+    );
+    const setupTx = ahApi.tx.Utility.dispatch_as({
+      as_origin: ftXcmOrigin as never,
+      call: ahApi.tx.PolkadotXcm.execute({
+        message: setupXcm,
+        max_weight: EXECUTE_MAX_WEIGHT,
+      }).decodedCall,
+    });
+    txs.push(setupTx);
+  }
+
+  if (includeReturn) {
+    // 3) Periodic returns: Scheduler.schedule_after(dispatch_as(FT) → execute(return)).
+    const periodicReturnParams = calculatePeriodicReturnParams(
+      proposal.inputs.returnFrequencyDays!,
+      proposal.inputs.numberOfReturns!,
+      proposal.calculations.estimatedHollarPerReturn,
+    );
+    const returnXcm = buildPeriodicReturnXcm(
+      network,
+      periodicReturnParams.hollarAmountPerReturn,
+      PER_HOP_FEE_PLANCK,
+      PER_HOP_FEE_PLANCK,
+      proposal.inputs.treasurySplitPercent!,
+      false,
+    );
+    const returnDispatch = ahApi.tx.Utility.dispatch_as({
+      as_origin: ftXcmOrigin as never,
+      call: ahApi.tx.PolkadotXcm.execute({
+        message: returnXcm,
+        max_weight: EXECUTE_MAX_WEIGHT,
+      }).decodedCall,
+    });
+    const scheduledTx = ahApi.tx.Scheduler.schedule_after({
+      after: periodicReturnParams.initialDelayBlocks,
+      maybe_periodic: [
+        periodicReturnParams.periodBlocks,
+        periodicReturnParams.repetitions,
+      ] as [number, number],
+      priority: 128,
+      call: returnDispatch.decodedCall,
+    });
+    txs.push(scheduledTx);
+  }
+
+  if (txs.length === 1) {
+    return (await txs[0].getEncodedData()).asHex();
+  }
+
+  const batchCall = ahApi.tx.Utility.batch_all({
+    calls: txs.map((t) => t.decodedCall) as never,
   });
   return (await batchCall.getEncodedData()).asHex();
 }
