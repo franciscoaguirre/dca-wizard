@@ -12,13 +12,15 @@
  * ignored and fall back to the value already in the base state.
  */
 
-import type { NetworkType, ProposalMode } from '../api/constants';
+import type { NetworkType, ProposalMode, ProposalOrigin } from '../api/constants';
 import { calculateNumberOfReturns } from '../governance/periodic-return';
+import { deriveProposalMode } from '../governance/builder';
 import type { WizardState } from './use-wizard-state';
 
 const MODES: ProposalMode[] = ['setup', 'return', 'both'];
 const NETWORKS: NetworkType[] = ['polkadot', 'paseo'];
 const FREQUENCY_UNITS: WizardState['returnFrequencyUnit'][] = ['days', 'blocks'];
+const ORIGINS: ProposalOrigin[] = ['treasury', 'fellowship'];
 
 /**
  * Serialize the shareable fields of the current state into a query string
@@ -30,6 +32,9 @@ export function buildSearchParams(state: WizardState): string {
 
   params.set('mode', state.mode);
   params.set('network', state.network);
+  params.set('origin', state.origin);
+  params.set('dcaEnabled', String(state.dcaEnabled));
+  params.set('returnsEnabled', String(state.returnsEnabled));
 
   if (state.mode !== 'return') {
     if (state.dotAmount) params.set('dotAmount', state.dotAmount);
@@ -81,6 +86,23 @@ export function applyParamsToState(search: string, base: WizardState): WizardSta
   if (network && (NETWORKS as string[]).includes(network)) {
     next.network = network as NetworkType;
   }
+
+  const origin = params.get('origin');
+  if (origin && (ORIGINS as string[]).includes(origin)) {
+    next.origin = origin as ProposalOrigin;
+  }
+
+  // Prefer explicit toggles; fall back to a legacy `mode` param if present.
+  const dcaParam = params.get('dcaEnabled');
+  const returnsParam = params.get('returnsEnabled');
+  if (dcaParam !== null || returnsParam !== null) {
+    next.dcaEnabled = dcaParam === null ? next.dcaEnabled : dcaParam === 'true';
+    next.returnsEnabled = returnsParam === null ? next.returnsEnabled : returnsParam === 'true';
+  } else if (next.mode) {
+    next.dcaEnabled = next.mode !== 'return';
+    next.returnsEnabled = next.mode !== 'setup';
+  }
+  next.mode = deriveProposalMode(next.dcaEnabled, next.returnsEnabled) ?? next.mode;
 
   // String amounts are kept verbatim (decimal strings); validation happens later.
   const dotAmount = params.get('dotAmount');
