@@ -1,7 +1,9 @@
 /**
  * Submit Proposal Component
  * Connects a wallet, optionally notes a preimage for large calls, and submits
- * a Fellowship referendum on the Architects track.
+ * the proposal as a referendum. The origin determines the path: a Root-track
+ * referendum on Asset Hub for the treasury origin, or a Fellowship referendum
+ * on the Architects track (Collectives) for the fellowship origin.
  */
 
 import { useState } from 'react';
@@ -224,7 +226,7 @@ export function SubmitProposal({ proposal, onBack }: SubmitProposalProps) {
 
   return (
     <div className="space-y-5">
-      <SubmissionStatus status={status} />
+      <SubmissionStatus status={status} isTreasury={isTreasury} />
 
       {status.kind === 'choose-extension' && (
         <Card>
@@ -299,7 +301,7 @@ export function SubmitProposal({ proposal, onBack }: SubmitProposalProps) {
                 value={`${proposal.inputs.numberOfReturns}× every ${proposal.inputs.returnFrequencyDays} days`}
               />
             )}
-            <SummaryRow label="Track" value="Architects (Collectives)" />
+            <SummaryRow label="Track" value={isTreasury ? 'Root (Asset Hub)' : 'Architects (Collectives)'} />
           </div>
         </CardContent>
       </Card>
@@ -310,7 +312,11 @@ export function SubmitProposal({ proposal, onBack }: SubmitProposalProps) {
         </CardHeader>
         <CardContent>
           <ul className="space-y-2 text-sm text-secondary">
-            <li>You need an Architect-rank account (Dan 4 or higher) on the Collectives chain.</li>
+            {isTreasury ? (
+              <li>Anyone can submit a Root-track referendum on Asset Hub; no special account rank is required.</li>
+            ) : (
+              <li>You need an Architect-rank account (Dan 4 or higher) on the Collectives chain.</li>
+            )}
             <li>The submission deposit is paid from the signing account; refunded when the referendum closes.</li>
             <li>After submission, the Decision Deposit must be placed for the referendum to enter the decision period.</li>
           </ul>
@@ -402,7 +408,7 @@ function SummaryRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-function SubmissionStatus({ status }: { status: Status }) {
+function SubmissionStatus({ status, isTreasury }: { status: Status; isTreasury: boolean }) {
   if (status.kind === 'idle') {
     return (
       <Alert>
@@ -426,7 +432,7 @@ function SubmissionStatus({ status }: { status: Status }) {
       },
       referendum: {
         title: 'Submitting the referendum',
-        body: 'Sign in your wallet to submit on the Architects track.',
+        body: `Sign in your wallet to submit on the ${isTreasury ? 'Root' : 'Architects'} track.`,
       },
     };
     const copy = stepCopy[status.step];
