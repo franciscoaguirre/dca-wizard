@@ -20,6 +20,7 @@ import {
   type InjectedPolkadotAccount,
 } from '../api/wallets';
 import { getCollectivesApi } from '../api/clients/collectives';
+import { getAssetHubApi } from '../api/clients/dotAh';
 
 type Status =
   | { kind: 'idle' }
@@ -36,7 +37,44 @@ interface SubmitProposalProps {
   onBack: () => void;
 }
 
-const POLKASSEMBLY_BASE = 'https://collectives.polkassembly.io/referenda';
+const POLKASSEMBLY_COLLECTIVES = 'https://collectives.polkassembly.io/referenda';
+const POLKASSEMBLY_POLKADOT = 'https://polkadot.polkassembly.io/referenda';
+
+type BoundedProposal = { type: 'Inline'; value: Binary } | { type: 'Lookup'; value: { hash: Binary; len: number } };
+
+/**
+ * Notes the encoded call as a preimage when it exceeds the inline size limit (10 KB), otherwise
+ * returns it inline. Shared by the treasury (Asset Hub) and fellowship (Collectives) submission
+ * paths, which differ only in which chain's `Preimage` pallet is used.
+ */
+async function noteOrInlineProposal(
+  api: Awaited<ReturnType<typeof getAssetHubApi>> | Awaited<ReturnType<typeof getCollectivesApi>>,
+  callBinary: Binary,
+  callSize: number,
+  signer: InjectedPolkadotAccount['polkadotSigner'],
+  onPreimageStep: () => void,
+): Promise<BoundedProposal> {
+  if (callSize <= 10 * 1024) {
+    return { type: 'Inline', value: callBinary };
+  }
+
+  onPreimageStep();
+  const preimageTx = api.tx.Preimage.note_preimage({ bytes: callBinary });
+  const preimageResult = await preimageTx.signAndSubmit(signer);
+  if (!preimageResult.ok) {
+    throw new Error(formatDispatchError(preimageResult.dispatchError));
+  }
+  const noted = preimageResult.events.find(
+    (e: { type: string; value: { type: string } }) => e.type === 'Preimage' && e.value.type === 'Noted',
+  );
+  if (!noted || noted.value.type !== 'Noted') {
+    throw new Error('Preimage submitted but no Noted event was found');
+  }
+  return {
+    type: 'Lookup',
+    value: { hash: noted.value.value.hash as unknown as Binary, len: callSize },
+  };
+}
 
 function shortAddress(addr: string): string {
   if (addr.length < 12) return addr;
@@ -46,6 +84,8 @@ function shortAddress(addr: string): string {
 export function SubmitProposal({ proposal, onBack }: SubmitProposalProps) {
   const [status, setStatus] = useState<Status>({ kind: 'idle' });
   const isProcessing = status.kind === 'submitting' || status.kind === 'connecting';
+  const isTreasury = (proposal.inputs.origin ?? 'fellowship') === 'treasury';
+  const trackingBase = isTreasury ? POLKASSEMBLY_POLKADOT : POLKASSEMBLY_COLLECTIVES;
 
   const handleConnect = async () => {
     setStatus({ kind: 'connecting' });
@@ -104,55 +144,74 @@ export function SubmitProposal({ proposal, onBack }: SubmitProposalProps) {
 
       const callBinary = Binary.fromHex(encoded);
       const callSize = callBinary.asBytes().length;
-      const collectivesApi = await getCollectivesApi('polkadot');
+      const onPreimageStep = () => setStatus({ kind: 'submitting', account, step: 'preimage' });
 
-      let bounded:
-        | { type: 'Inline'; value: Binary }
-        | { type: 'Lookup'; value: { hash: Binary; len: number } };
+      let referendumId: number;
 
-      if (callSize > 10 * 1024) {
-        setStatus({ kind: 'submitting', account, step: 'preimage' });
-        const preimageTx = collectivesApi.tx.Preimage.note_preimage({ bytes: callBinary });
-        const preimageResult = await preimageTx.signAndSubmit(account.polkadotSigner);
-        if (!preimageResult.ok) {
-          throw new Error(formatDispatchError(preimageResult.dispatchError));
-        }
-        const noted = preimageResult.events.find(
-          (e: { type: string; value: { type: string } }) =>
-            e.type === 'Preimage' && e.value.type === 'Noted',
+      if (isTreasury) {
+        const assetHubApi = await getAssetHubApi('polkadot');
+        const bounded = await noteOrInlineProposal(
+          assetHubApi,
+          callBinary,
+          callSize,
+          account.polkadotSigner,
+          onPreimageStep,
         );
-        if (!noted || noted.value.type !== 'Noted') {
-          throw new Error('Preimage submitted but no Noted event was found');
+
+        setStatus({ kind: 'submitting', account, step: 'referendum' });
+        const submitTx = assetHubApi.tx.Referenda.submit({
+          proposal_origin: {
+            type: 'system',
+            value: { type: 'Root', value: undefined },
+          } as never,
+          proposal: bounded as never,
+          enactment_moment: { type: 'After', value: 0 },
+        });
+        const submitResult = await submitTx.signAndSubmit(account.polkadotSigner);
+        if (!submitResult.ok) {
+          throw new Error(formatDispatchError(submitResult.dispatchError));
         }
-        bounded = {
-          type: 'Lookup',
-          value: { hash: noted.value.value.hash as unknown as Binary, len: callSize },
-        };
+        const submitted = submitResult.events.find(
+          (e: { type: string; value: { type: string } }) =>
+            e.type === 'Referenda' && e.value.type === 'Submitted',
+        );
+        if (!submitted || submitted.value.type !== 'Submitted') {
+          throw new Error('Referendum submitted but no Submitted event was found');
+        }
+        referendumId = (submitted.value.value as { index: number }).index;
       } else {
-        bounded = { type: 'Inline', value: callBinary };
+        const collectivesApi = await getCollectivesApi('polkadot');
+        const bounded = await noteOrInlineProposal(
+          collectivesApi,
+          callBinary,
+          callSize,
+          account.polkadotSigner,
+          onPreimageStep,
+        );
+
+        setStatus({ kind: 'submitting', account, step: 'referendum' });
+        const submitTx = collectivesApi.tx.FellowshipReferenda.submit({
+          proposal_origin: {
+            type: 'FellowshipOrigins',
+            value: { type: 'Architects', value: undefined },
+          } as never,
+          proposal: bounded as never,
+          enactment_moment: { type: 'After', value: 0 },
+        });
+        const submitResult = await submitTx.signAndSubmit(account.polkadotSigner);
+        if (!submitResult.ok) {
+          throw new Error(formatDispatchError(submitResult.dispatchError));
+        }
+        const submitted = submitResult.events.find(
+          (e: { type: string; value: { type: string } }) =>
+            e.type === 'FellowshipReferenda' && e.value.type === 'Submitted',
+        );
+        if (!submitted || submitted.value.type !== 'Submitted') {
+          throw new Error('Referendum submitted but no Submitted event was found');
+        }
+        referendumId = (submitted.value.value as { index: number }).index;
       }
 
-      setStatus({ kind: 'submitting', account, step: 'referendum' });
-      const submitTx = collectivesApi.tx.FellowshipReferenda.submit({
-        proposal_origin: {
-          type: 'FellowshipOrigins',
-          value: { type: 'Architects', value: undefined },
-        } as never,
-        proposal: bounded as never,
-        enactment_moment: { type: 'After', value: 0 },
-      });
-      const submitResult = await submitTx.signAndSubmit(account.polkadotSigner);
-      if (!submitResult.ok) {
-        throw new Error(formatDispatchError(submitResult.dispatchError));
-      }
-      const submitted = submitResult.events.find(
-        (e: { type: string; value: { type: string } }) =>
-          e.type === 'FellowshipReferenda' && e.value.type === 'Submitted',
-      );
-      if (!submitted || submitted.value.type !== 'Submitted') {
-        throw new Error('Referendum submitted but no Submitted event was found');
-      }
-      const referendumId = (submitted.value.value as { index: number }).index;
       setStatus({ kind: 'success', account, referendumId });
     } catch (e) {
       setStatus({
@@ -268,7 +327,7 @@ export function SubmitProposal({ proposal, onBack }: SubmitProposalProps) {
               <li>
                 Track this referendum on{' '}
                 <a
-                  href={`${POLKASSEMBLY_BASE}/${status.referendumId}`}
+                  href={`${trackingBase}/${status.referendumId}`}
                   target="_blank"
                   rel="noreferrer"
                   className="text-link hover:text-link-hover inline-flex items-center gap-1"
