@@ -343,7 +343,11 @@ export function SubmitProposal({ proposal, onBack }: SubmitProposalProps) {
                 .
               </li>
               <li>Place the Decision Deposit so voting can begin.</li>
-              <li>Engage with the Fellowship to discuss and promote the proposal.</li>
+              <li>
+                {isTreasury
+                  ? 'Engage with the community to discuss and promote the proposal.'
+                  : 'Engage with the Fellowship to discuss and promote the proposal.'}
+              </li>
               <li>If approved, execution is automatic. Watch DCA progress on Hydration.</li>
             </ol>
           </CardContent>
