@@ -34,11 +34,23 @@ export function getTransactionBreakdown(
     timing: string;
   }> = [];
 
+  const isTreasury = (inputs.origin ?? 'fellowship') === 'treasury';
+
+  if (isTreasury && mode !== 'return') {
+    calls.push({
+      name: 'Treasury spend',
+      pallet: 'Utility → Balances',
+      call: 'dispatch_as(Treasury) → transfer_keep_alive',
+      description: `Transfer ${dotAmountDisplay.toLocaleString()} DOT from the main Treasury to the Fellowship Treasury account on Asset Hub`,
+      timing: 'Immediate',
+    });
+  }
+
   if (mode !== 'return') {
     calls.push({
       name: 'Setup DCA',
-      pallet: 'PolkadotXcm',
-      call: 'send → Asset Hub',
+      pallet: isTreasury ? 'Utility → PolkadotXcm' : 'PolkadotXcm',
+      call: isTreasury ? 'dispatch_as(FT) → execute' : 'send → Asset Hub',
       description: `Single V5 XCM: transfer ${dotAmountDisplay} DOT from Fellowship Treasury to its Hydration sovereign and start the DCA schedule (DOT → HOLLAR) in one inbound message`,
       timing: 'Immediate',
     });
@@ -47,8 +59,10 @@ export function getTransactionBreakdown(
   if (mode !== 'setup') {
     calls.push({
       name: 'Periodic Returns',
-      pallet: 'Scheduler → PolkadotXcm',
-      call: 'schedule_after(periodic) → send → Asset Hub',
+      pallet: isTreasury ? 'Scheduler → Utility → PolkadotXcm' : 'Scheduler → PolkadotXcm',
+      call: isTreasury
+        ? 'schedule_after(periodic) → dispatch_as(FT) → execute'
+        : 'schedule_after(periodic) → send → Asset Hub',
       description: `XCM (AH → Hydration → AH) returning HOLLAR to Fellowship Treasury (${inputs.treasurySplitPercent ?? 0}%) / Salary (${inputs.salarySplitPercent ?? 0}%) every ${inputs.returnFrequencyDays ?? 0} days, ${inputs.numberOfReturns ?? 0} times`,
       timing: `Every ${inputs.returnFrequencyDays ?? 0} days`,
     });

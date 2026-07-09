@@ -47,11 +47,12 @@ export function DcaWizard() {
 
         <header className="mt-8 md:mt-12">
           <h1 className="font-display text-4xl md:text-5xl leading-tight text-primary">
-            Build a Fellowship DCA proposal
+            Build a DCA proposal
           </h1>
           <p className="mt-3 text-base text-secondary max-w-2xl">
-            Convert DOT to HOLLAR over time and schedule periodic returns
-            to the Fellowship Treasury and Salary, in a single Architects-track referendum.
+            Choose an origin, configure the DCA, and set a destination — a single
+            referendum that converts DOT to HOLLAR over time and returns it to the
+            Fellowship.
           </p>
         </header>
 
