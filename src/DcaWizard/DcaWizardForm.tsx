@@ -4,7 +4,7 @@
  */
 
 import type { WizardState, WizardAction } from './use-wizard-state';
-import type { ProposalMode } from '../api/constants';
+import type { ProposalOrigin } from '../api/constants';
 import { DEFAULTS, TIMING } from '../api/constants';
 import { Card, CardContent } from '../components/ui/card';
 import { Input } from '../components/ui/input';
@@ -13,8 +13,7 @@ import { Label } from '../components/ui/label';
 import { Button } from '../components/ui/button';
 import { Alert, AlertDescription, AlertTitle } from '../components/ui/alert';
 import { Slider } from '../components/ui/slider';
-import { TreasurySnapshot } from '../components/TreasurySnapshot';
-import { DcaStatus } from '../components/DcaStatus';
+import { InfoPanel } from '../components/InfoPanel';
 import { ArrowDown } from 'lucide-react';
 import { useDotPrice } from '../api/price';
 import { useEffect } from 'react';
@@ -33,17 +32,24 @@ function formatHollarShort(amount: bigint): string {
   return `${whole.toLocaleString()}.${cents.toString().padStart(2, '0')}`;
 }
 
-const MODES: Array<{ value: ProposalMode; label: string; description: string }> = [
-  { value: 'setup', label: 'Setup only', description: 'Transfer DOT and start the DCA schedule.' },
-  { value: 'return', label: 'Return only', description: 'Schedule periodic HOLLAR returns.' },
-  { value: 'both', label: 'Setup + return', description: 'Start a DCA and schedule its returns.' },
+const ORIGINS: Array<{ value: ProposalOrigin; label: string; description: string }> = [
+  {
+    value: 'treasury',
+    label: 'Main Treasury',
+    description: 'Spend DOT from the main Polkadot Treasury. Submitted as an Asset Hub Root referendum.',
+  },
+  {
+    value: 'fellowship',
+    label: 'Fellowship sub-treasury',
+    description: 'Use the Fellowship Treasury balance. Submitted as a Collectives Architects referendum.',
+  },
 ];
 
 export function DcaWizardForm({ state, dispatch, onNext }: DcaWizardFormProps) {
   const hasErrors = Object.keys(state.errors).length > 0;
   const { price: dotPrice } = useDotPrice();
-  const showSetup = state.mode !== 'return';
-  const showReturn = state.mode !== 'setup';
+  const showSetup = state.dcaEnabled;
+  const showReturn = state.returnsEnabled;
 
   useEffect(() => {
     dispatch({ type: 'SET_DOT_PRICE', payload: dotPrice });
@@ -62,34 +68,59 @@ export function DcaWizardForm({ state, dispatch, onNext }: DcaWizardFormProps) {
 
   return (
     <form onSubmit={handleSubmit} className="space-y-5">
-      <TreasurySnapshot />
+      <InfoPanel />
 
-      <DcaStatus />
-
-      {/* Mode selector */}
+      {/* ① Origin */}
       <Card>
         <CardContent className="pt-6">
-          <h2 className="text-base font-semibold text-primary mb-4">Proposal mode</h2>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            {MODES.map((m) => {
-              const active = state.mode === m.value;
+          <h2 className="text-base font-semibold text-primary mb-1">1. Origin</h2>
+          <p className="text-xs text-secondary mb-4">Where the DOT comes from, and which referendum authorizes it.</p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {ORIGINS.map((o) => {
+              const active = state.origin === o.value;
               return (
                 <button
-                  key={m.value}
+                  key={o.value}
                   type="button"
-                  onClick={() => dispatch({ type: 'SET_MODE', payload: m.value })}
+                  onClick={() => dispatch({ type: 'SET_ORIGIN', payload: o.value })}
                   className={`text-left rounded-nested p-4 transition-colors cursor-pointer ${
                     active
                       ? 'bg-selection-container-active border-2 border-default-inverted'
                       : 'bg-surface-nested border-2 border-transparent hover:bg-selection-container-hover'
                   }`}
                 >
-                  <p className="text-sm font-semibold text-primary">{m.label}</p>
-                  <p className="text-xs text-secondary mt-1">{m.description}</p>
+                  <p className="text-sm font-semibold text-primary">{o.label}</p>
+                  <p className="text-xs text-secondary mt-1">{o.description}</p>
                 </button>
               );
             })}
           </div>
+        </CardContent>
+      </Card>
+
+      {/* ② DCA */}
+      <Card>
+        <CardContent className="pt-6">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h2 className="text-base font-semibold text-primary">2. DCA</h2>
+              <p className="text-xs text-secondary">Convert DOT to HOLLAR over time on Hydration.</p>
+            </div>
+            <label className="flex items-center gap-2 text-xs text-tertiary cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={state.dcaEnabled}
+                onChange={(e) => dispatch({ type: 'SET_DCA_ENABLED', payload: e.target.checked })}
+                className="h-3.5 w-3.5 rounded border cursor-pointer"
+              />
+              Set up a DCA
+            </label>
+          </div>
+          {!state.dcaEnabled && (
+            <p className="text-xs text-tertiary">
+              DCA is off — this proposal will only schedule returns (e.g. to sweep leftover HOLLAR).
+            </p>
+          )}
         </CardContent>
       </Card>
 
@@ -248,7 +279,27 @@ export function DcaWizardForm({ state, dispatch, onNext }: DcaWizardFormProps) {
         </>
       )}
 
-      {/* Return section */}
+      {/* ③ Destination */}
+      <Card>
+        <CardContent className="pt-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-base font-semibold text-primary">3. Destination</h2>
+              <p className="text-xs text-secondary">Return HOLLAR to the Fellowship Treasury and Salary.</p>
+            </div>
+            <label className="flex items-center gap-2 text-xs text-tertiary cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={state.returnsEnabled}
+                onChange={(e) => dispatch({ type: 'SET_RETURNS_ENABLED', payload: e.target.checked })}
+                className="h-3.5 w-3.5 rounded border cursor-pointer"
+              />
+              Automatic returns
+            </label>
+          </div>
+        </CardContent>
+      </Card>
+
       {showReturn && (
         <>
           {state.mode === 'return' && (
