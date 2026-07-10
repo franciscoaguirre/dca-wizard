@@ -12,10 +12,19 @@ export type NetworkType = 'polkadot' | 'paseo';
 // - both:   setup + scheduled periodic returns wrapped in Utility.batch_all            (2 calls)
 export type ProposalMode = 'setup' | 'return' | 'both';
 
+// Proposal Origin: which treasury funds the DCA and therefore which referendum
+// track authorizes it.
+// - treasury:   main Polkadot Treasury → OpenGov Root referendum on Asset Hub
+// - fellowship: Fellowship sub-treasury → Collectives Architects referendum
+export type ProposalOrigin = 'treasury' | 'fellowship';
+
 // Account Addresses
 export const ACCOUNTS = {
   FELLOWSHIP_TREASURY: '16VcQSRcMFy6ZHVjBvosKmo7FKqTb8ZATChDYo8ibutzLnos',
   FELLOWSHIP_SALARY: '13w7NdvSR1Af8xsQTArDtZmVvjE8XhWNdL4yed3iFHrUNCnS',
+  // Polkadot Treasury pallet account ("py/trsry"). Same account bytes on Asset
+  // Hub post-AHM. Verify against chain before mainnet submission.
+  MAIN_TREASURY: '13UVJyLnbVp9RBZYFwFGyDvVd1y27Tt8tkntv6Q7JVPhFsTB',
 } as const;
 
 // Fellowship pallet indices on Collectives chain

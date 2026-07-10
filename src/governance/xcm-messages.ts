@@ -143,6 +143,7 @@ export function buildSetupXcm(
   dotTotalPlanck: bigint,
   hydrationFeePlanck: bigint,
   dcaCallEncoded: Binary,
+  withLeadingAlias: boolean = true,
 ): XcmVersionedXcm {
   if (hydrationFeePlanck <= 0n) {
     throw new Error('hydrationFeePlanck must be > 0 (PayFees needs a non-zero asset)');
@@ -152,7 +153,7 @@ export function buildSetupXcm(
   const hydrationParaId = getParachainId(network, 'HYDRATION');
 
   return XcmVersionedXcm.V5([
-    XcmV5Instruction.AliasOrigin(ftLocation),
+    ...(withLeadingAlias ? [XcmV5Instruction.AliasOrigin(ftLocation)] : []),
 
     XcmV5Instruction.UnpaidExecution({
       weight_limit: XcmV3WeightLimit.Unlimited(),
@@ -238,6 +239,7 @@ export function buildPeriodicReturnXcm(
   hydrationFee: bigint,
   ahReturnFee: bigint,
   treasurySplitPercent: number,
+  withLeadingAlias: boolean = true,
 ): XcmVersionedXcm {
   if (hollarAmountPerReturn <= 0n) {
     throw new Error('Cannot build return XCM: HOLLAR amount must be > 0');
@@ -290,7 +292,7 @@ export function buildPeriodicReturnXcm(
         : [sweepHollarTo(FELLOWSHIP_SALARY_ID)];
 
   return XcmVersionedXcm.V5([
-    XcmV5Instruction.AliasOrigin(ftLocation),
+    ...(withLeadingAlias ? [XcmV5Instruction.AliasOrigin(ftLocation)] : []),
 
     XcmV5Instruction.UnpaidExecution({
       weight_limit: XcmV3WeightLimit.Unlimited(),

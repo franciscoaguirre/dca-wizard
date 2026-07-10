@@ -16,6 +16,7 @@ export interface AccountBalances {
 }
 
 export interface TreasuryBalancesResult {
+  mainTreasury: AccountBalances | null;
   treasury: AccountBalances | null;
   salary: AccountBalances | null;
   loading: boolean;
@@ -50,6 +51,7 @@ async function fetchAccountBalances(
 }
 
 export function useTreasuryBalances(network: NetworkType): TreasuryBalancesResult {
+  const [mainTreasury, setMainTreasury] = useState<AccountBalances | null>(null);
   const [treasury, setTreasury] = useState<AccountBalances | null>(null);
   const [salary, setSalary] = useState<AccountBalances | null>(null);
   const [loading, setLoading] = useState(true);
@@ -60,16 +62,19 @@ export function useTreasuryBalances(network: NetworkType): TreasuryBalancesResul
 
     const load = async () => {
       try {
-        const [t, s] = await Promise.all([
+        const [m, t, s] = await Promise.all([
+          fetchAccountBalances(network, ACCOUNTS.MAIN_TREASURY),
           fetchAccountBalances(network, ACCOUNTS.FELLOWSHIP_TREASURY),
           fetchAccountBalances(network, ACCOUNTS.FELLOWSHIP_SALARY),
         ]);
         if (cancelled) return;
+        setMainTreasury(m);
         setTreasury(t);
         setSalary(s);
         setError(null);
       } catch (e) {
         if (cancelled) return;
+        setMainTreasury((prev) => prev ?? ZERO);
         setTreasury((prev) => prev ?? ZERO);
         setSalary((prev) => prev ?? ZERO);
         setError(e instanceof Error ? e.message : 'Failed to load balances');
@@ -86,5 +91,5 @@ export function useTreasuryBalances(network: NetworkType): TreasuryBalancesResul
     };
   }, [network]);
 
-  return { treasury, salary, loading, error };
+  return { mainTreasury, treasury, salary, loading, error };
 }

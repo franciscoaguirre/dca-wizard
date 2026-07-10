@@ -4,7 +4,7 @@
  */
 
 import type { WizardState, WizardAction } from './use-wizard-state';
-import type { ProposalMode } from '../api/constants';
+import type { ProposalOrigin } from '../api/constants';
 import { DEFAULTS, TIMING } from '../api/constants';
 import { Card, CardContent } from '../components/ui/card';
 import { Input } from '../components/ui/input';
@@ -13,8 +13,7 @@ import { Label } from '../components/ui/label';
 import { Button } from '../components/ui/button';
 import { Alert, AlertDescription, AlertTitle } from '../components/ui/alert';
 import { Slider } from '../components/ui/slider';
-import { TreasurySnapshot } from '../components/TreasurySnapshot';
-import { DcaStatus } from '../components/DcaStatus';
+import { InfoPanel } from '../components/InfoPanel';
 import { ArrowDown } from 'lucide-react';
 import { useDotPrice } from '../api/price';
 import { useEffect } from 'react';
@@ -33,17 +32,24 @@ function formatHollarShort(amount: bigint): string {
   return `${whole.toLocaleString()}.${cents.toString().padStart(2, '0')}`;
 }
 
-const MODES: Array<{ value: ProposalMode; label: string; description: string }> = [
-  { value: 'setup', label: 'Setup only', description: 'Transfer DOT and start the DCA schedule.' },
-  { value: 'return', label: 'Return only', description: 'Schedule periodic HOLLAR returns.' },
-  { value: 'both', label: 'Setup + return', description: 'Start a DCA and schedule its returns.' },
+const ORIGINS: Array<{ value: ProposalOrigin; label: string; description: string }> = [
+  {
+    value: 'treasury',
+    label: 'Main Treasury',
+    description: 'Spend DOT from the main Polkadot Treasury. Submitted as an Asset Hub Root referendum.',
+  },
+  {
+    value: 'fellowship',
+    label: 'Fellowship sub-treasury',
+    description: 'Use the Fellowship Treasury balance. Submitted as a Collectives Architects referendum.',
+  },
 ];
 
 export function DcaWizardForm({ state, dispatch, onNext }: DcaWizardFormProps) {
   const hasErrors = Object.keys(state.errors).length > 0;
   const { price: dotPrice } = useDotPrice();
-  const showSetup = state.mode !== 'return';
-  const showReturn = state.mode !== 'setup';
+  const showSetup = state.dcaEnabled;
+  const showReturn = state.returnsEnabled;
 
   useEffect(() => {
     dispatch({ type: 'SET_DOT_PRICE', payload: dotPrice });
@@ -62,30 +68,29 @@ export function DcaWizardForm({ state, dispatch, onNext }: DcaWizardFormProps) {
 
   return (
     <form onSubmit={handleSubmit} className="space-y-5">
-      <TreasurySnapshot />
+      <InfoPanel />
 
-      <DcaStatus />
-
-      {/* Mode selector */}
+      {/* ① Origin */}
       <Card>
         <CardContent className="pt-6">
-          <h2 className="text-base font-semibold text-primary mb-4">Proposal mode</h2>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-            {MODES.map((m) => {
-              const active = state.mode === m.value;
+          <h2 className="text-base font-semibold text-primary mb-1">1. Origin</h2>
+          <p className="text-xs text-secondary mb-4">Where the DOT comes from, and which referendum authorizes it.</p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {ORIGINS.map((o) => {
+              const active = state.origin === o.value;
               return (
                 <button
-                  key={m.value}
+                  key={o.value}
                   type="button"
-                  onClick={() => dispatch({ type: 'SET_MODE', payload: m.value })}
+                  onClick={() => dispatch({ type: 'SET_ORIGIN', payload: o.value })}
                   className={`text-left rounded-nested p-4 transition-colors cursor-pointer ${
                     active
                       ? 'bg-selection-container-active border-2 border-default-inverted'
                       : 'bg-surface-nested border-2 border-transparent hover:bg-selection-container-hover'
                   }`}
                 >
-                  <p className="text-sm font-semibold text-primary">{m.label}</p>
-                  <p className="text-xs text-secondary mt-1">{m.description}</p>
+                  <p className="text-sm font-semibold text-primary">{o.label}</p>
+                  <p className="text-xs text-secondary mt-1">{o.description}</p>
                 </button>
               );
             })}
@@ -93,12 +98,33 @@ export function DcaWizardForm({ state, dispatch, onNext }: DcaWizardFormProps) {
         </CardContent>
       </Card>
 
-      {/* Setup section */}
-      {showSetup && (
-        <>
-          <Card>
-            <CardContent className="pt-6">
-              <h2 className="text-base font-semibold text-primary mb-4">Convert DOT to HOLLAR</h2>
+      {/* ② DCA */}
+      <Card>
+        <CardContent className="pt-6 space-y-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-base font-semibold text-primary">2. DCA</h2>
+              <p className="text-xs text-secondary">Convert DOT to HOLLAR over time on Hydration.</p>
+            </div>
+            <label className="flex items-center gap-2 text-xs text-tertiary cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={state.dcaEnabled}
+                onChange={(e) => dispatch({ type: 'SET_DCA_ENABLED', payload: e.target.checked })}
+                className="h-3.5 w-3.5 rounded border cursor-pointer"
+              />
+              Set up a DCA
+            </label>
+          </div>
+
+          {!state.dcaEnabled && (
+            <p className="text-xs text-tertiary">
+              DCA is off — this proposal will only schedule returns (e.g. to sweep leftover HOLLAR).
+            </p>
+          )}
+
+          {showSetup && (
+            <>
               <div className="space-y-3">
                 <div className="space-y-2">
                   <Label className="text-xs text-tertiary uppercase tracking-wide">You're converting</Label>
@@ -149,161 +175,174 @@ export function DcaWizardForm({ state, dispatch, onNext }: DcaWizardFormProps) {
                   </div>
                 </div>
               </div>
-            </CardContent>
-          </Card>
 
-          <Card>
-            <CardContent className="pt-6">
-              <h2 className="text-base font-semibold text-primary mb-4">DCA configuration</h2>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="dcaFrequency">Frequency</Label>
-                  <div className="flex items-center gap-2">
-                    <NumberInput
-                      id="dcaFrequency"
-                      min="10"
-                      value={state.dcaFrequencyBlocks}
-                      parse={(s) => parseInt(s, 10)}
-                      onChange={(val) =>
-                        dispatch({ type: 'SET_DCA_FREQUENCY', payload: val })
-                      }
-                      className="w-full"
-                    />
-                    <span className="text-xs text-tertiary whitespace-nowrap">blocks</span>
-                  </div>
-                  <p className="text-xs text-tertiary">
-                    ≈ {Math.round((state.dcaFrequencyBlocks * 6) / 60)} min
-                  </p>
-                  {state.errors.dcaFrequencyBlocks && (
-                    <p className="text-xs text-error">{state.errors.dcaFrequencyBlocks}</p>
-                  )}
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="dcaDuration">Duration</Label>
-                  <div className="flex items-center gap-2">
-                    <NumberInput
-                      id="dcaDuration"
-                      min="1"
-                      value={state.dcaDurationDays}
-                      parse={(s) => parseInt(s, 10)}
-                      onChange={(val) =>
-                        dispatch({ type: 'SET_DCA_DURATION', payload: val })
-                      }
-                      className="w-full"
-                    />
-                    <span className="text-xs text-tertiary whitespace-nowrap">days</span>
-                  </div>
-                  {state.errors.dcaDurationDays && (
-                    <p className="text-xs text-error">{state.errors.dcaDurationDays}</p>
-                  )}
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="slippage">Slippage</Label>
-                  <div className="flex items-center gap-2">
-                    <NumberInput
-                      id="slippage"
-                      min="0.1"
-                      max="10"
-                      step="0.1"
-                      value={state.slippagePercent}
-                      onChange={(val) =>
-                        dispatch({ type: 'SET_SLIPPAGE', payload: val })
-                      }
-                      className="w-full"
-                    />
-                    <span className="text-xs text-tertiary">%</span>
-                  </div>
-                  {state.errors.slippagePercent && (
-                    <p className="text-xs text-error">{state.errors.slippagePercent}</p>
-                  )}
-                </div>
-
-                <div className="space-y-2">
-                  <Label>Total trades</Label>
-                  <div className="pt-1.5">
-                    <p className="text-base font-semibold text-primary">
-                      {state.proposal?.calculations?.totalTrades?.toLocaleString() ?? '—'}
+              <div>
+                <h3 className="text-sm font-semibold text-primary mb-4">DCA configuration</h3>
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="dcaFrequency">Frequency</Label>
+                    <div className="flex items-center gap-2">
+                      <NumberInput
+                        id="dcaFrequency"
+                        min="10"
+                        value={state.dcaFrequencyBlocks}
+                        parse={(s) => parseInt(s, 10)}
+                        onChange={(val) =>
+                          dispatch({ type: 'SET_DCA_FREQUENCY', payload: val })
+                        }
+                        className="w-full"
+                      />
+                      <span className="text-xs text-tertiary whitespace-nowrap">blocks</span>
+                    </div>
+                    <p className="text-xs text-tertiary">
+                      ≈ {Math.round((state.dcaFrequencyBlocks * 6) / 60)} min
                     </p>
-                    {state.proposal?.calculations?.dotPerTrade != null && (
-                      <p className="text-xs text-tertiary">
-                        {(Number(state.proposal.calculations.dotPerTrade) / 1e10).toFixed(2)} DOT each
-                      </p>
+                    {state.errors.dcaFrequencyBlocks && (
+                      <p className="text-xs text-error">{state.errors.dcaFrequencyBlocks}</p>
                     )}
-                    {state.proposal?.calculations?.estimatedHollarTotal != null &&
-                      (state.proposal.calculations.totalTrades ?? 0) > 0 && (
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="dcaDuration">Duration</Label>
+                    <div className="flex items-center gap-2">
+                      <NumberInput
+                        id="dcaDuration"
+                        min="1"
+                        value={state.dcaDurationDays}
+                        parse={(s) => parseInt(s, 10)}
+                        onChange={(val) =>
+                          dispatch({ type: 'SET_DCA_DURATION', payload: val })
+                        }
+                        className="w-full"
+                      />
+                      <span className="text-xs text-tertiary whitespace-nowrap">days</span>
+                    </div>
+                    {state.errors.dcaDurationDays && (
+                      <p className="text-xs text-error">{state.errors.dcaDurationDays}</p>
+                    )}
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="slippage">Slippage</Label>
+                    <div className="flex items-center gap-2">
+                      <NumberInput
+                        id="slippage"
+                        min="0.1"
+                        max="10"
+                        step="0.1"
+                        value={state.slippagePercent}
+                        onChange={(val) =>
+                          dispatch({ type: 'SET_SLIPPAGE', payload: val })
+                        }
+                        className="w-full"
+                      />
+                      <span className="text-xs text-tertiary">%</span>
+                    </div>
+                    {state.errors.slippagePercent && (
+                      <p className="text-xs text-error">{state.errors.slippagePercent}</p>
+                    )}
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label>Total trades</Label>
+                    <div className="pt-1.5">
+                      <p className="text-base font-semibold text-primary">
+                        {state.proposal?.calculations?.totalTrades?.toLocaleString() ?? '—'}
+                      </p>
+                      {state.proposal?.calculations?.dotPerTrade != null && (
                         <p className="text-xs text-tertiary">
-                          ≈ {formatHollarShort(
-                            state.proposal.calculations.estimatedHollarTotal /
-                              BigInt(state.proposal.calculations.totalTrades),
-                          )} HOLLAR each
+                          {(Number(state.proposal.calculations.dotPerTrade) / 1e10).toFixed(2)} DOT each
                         </p>
                       )}
+                      {state.proposal?.calculations?.estimatedHollarTotal != null &&
+                        (state.proposal.calculations.totalTrades ?? 0) > 0 && (
+                          <p className="text-xs text-tertiary">
+                            ≈ {formatHollarShort(
+                              state.proposal.calculations.estimatedHollarTotal /
+                                BigInt(state.proposal.calculations.totalTrades),
+                            )} HOLLAR each
+                          </p>
+                        )}
+                    </div>
                   </div>
                 </div>
               </div>
-            </CardContent>
-          </Card>
-        </>
-      )}
-
-      {/* Return section */}
-      {showReturn && (
-        <>
-          {state.mode === 'return' && (
-            <Card>
-              <CardContent className="pt-6">
-                <h2 className="text-base font-semibold text-primary mb-4">Return amount</h2>
-                <div className="space-y-2">
-                  <Label htmlFor="hollarPerReturn">HOLLAR per return</Label>
-                  <div className="flex items-center gap-2">
-                    <Input
-                      id="hollarPerReturn"
-                      type="text"
-                      placeholder="0"
-                      value={state.hollarAmountPerReturn}
-                      onChange={(e) =>
-                        dispatch({ type: 'SET_HOLLAR_PER_RETURN', payload: e.target.value })
-                      }
-                      onBlur={() =>
-                        dispatch({ type: 'SET_FIELD_TOUCHED', payload: 'hollarAmountPerReturn' })
-                      }
-                      className="w-full"
-                    />
-                    <span className="text-xs text-tertiary whitespace-nowrap">HOLLAR</span>
-                  </div>
-                  <p className="text-xs text-tertiary">
-                    Amount of HOLLAR to withdraw from the Fellowship Treasury sovereign on Hydration each return.
-                  </p>
-                  {state.touched.hollarAmountPerReturn && state.errors.hollarAmountPerReturn && (
-                    <p className="text-xs text-error">{state.errors.hollarAmountPerReturn}</p>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
+            </>
           )}
+        </CardContent>
+      </Card>
 
-          <Card>
-            <CardContent className="pt-6">
-              <div className="flex items-center justify-between mb-4">
-                <h2 className="text-base font-semibold text-primary">Periodic returns</h2>
-                <label className="flex items-center gap-2 text-xs text-tertiary cursor-pointer select-none">
-                  <input
-                    type="checkbox"
-                    checked={state.returnFrequencyUnit === 'blocks'}
-                    onChange={(e) =>
-                      dispatch({
-                        type: 'SET_RETURN_FREQUENCY_UNIT',
-                        payload: e.target.checked ? 'blocks' : 'days',
-                      })
-                    }
-                    className="h-3.5 w-3.5 rounded border cursor-pointer"
-                  />
-                  Test mode (blocks)
-                </label>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
+      {/* ③ Destination */}
+      <Card>
+        <CardContent className="pt-6 space-y-6">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-base font-semibold text-primary">3. Destination</h2>
+              <p className="text-xs text-secondary">Return HOLLAR to the Fellowship Treasury and Salary.</p>
+            </div>
+            <label className="flex items-center gap-2 text-xs text-tertiary cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={state.returnsEnabled}
+                onChange={(e) => dispatch({ type: 'SET_RETURNS_ENABLED', payload: e.target.checked })}
+                className="h-3.5 w-3.5 rounded border cursor-pointer"
+              />
+              Automatic returns
+            </label>
+          </div>
+
+          {showReturn && (
+            <>
+              {state.mode === 'return' && (
+                <div>
+                  <h3 className="text-sm font-semibold text-primary mb-2">Return amount</h3>
+                  <div className="space-y-2">
+                    <Label htmlFor="hollarPerReturn">HOLLAR per return</Label>
+                    <div className="flex items-center gap-2">
+                      <Input
+                        id="hollarPerReturn"
+                        type="text"
+                        placeholder="0"
+                        value={state.hollarAmountPerReturn}
+                        onChange={(e) =>
+                          dispatch({ type: 'SET_HOLLAR_PER_RETURN', payload: e.target.value })
+                        }
+                        onBlur={() =>
+                          dispatch({ type: 'SET_FIELD_TOUCHED', payload: 'hollarAmountPerReturn' })
+                        }
+                        className="w-full"
+                      />
+                      <span className="text-xs text-tertiary whitespace-nowrap">HOLLAR</span>
+                    </div>
+                    <p className="text-xs text-tertiary">
+                      Amount of HOLLAR to withdraw from the Fellowship Treasury sovereign on Hydration each return.
+                    </p>
+                    {state.touched.hollarAmountPerReturn && state.errors.hollarAmountPerReturn && (
+                      <p className="text-xs text-error">{state.errors.hollarAmountPerReturn}</p>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              <div>
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-sm font-semibold text-primary">Periodic returns</h3>
+                  <label className="flex items-center gap-2 text-xs text-tertiary cursor-pointer select-none">
+                    <input
+                      type="checkbox"
+                      checked={state.returnFrequencyUnit === 'blocks'}
+                      onChange={(e) =>
+                        dispatch({
+                          type: 'SET_RETURN_FREQUENCY_UNIT',
+                          payload: e.target.checked ? 'blocks' : 'days',
+                        })
+                      }
+                      className="h-3.5 w-3.5 rounded border cursor-pointer"
+                    />
+                    Test mode (blocks)
+                  </label>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label htmlFor="returnFrequency">Return frequency</Label>
                   <div className="flex items-center gap-2">
@@ -415,40 +454,39 @@ export function DcaWizardForm({ state, dispatch, onNext }: DcaWizardFormProps) {
                       The Fellowship Treasury sovereign on Hydration must hold at least this total before the first return executes.
                     </p>
                   )}
-                </div>
-              )}
-            </CardContent>
-          </Card>
+                  </div>
+                )}
+              </div>
 
-          <Card>
-            <CardContent className="pt-6">
-              <h2 className="text-base font-semibold text-primary mb-4">Beneficiary split</h2>
-              <div className="space-y-4">
-                <div className="flex justify-between text-xs text-secondary">
-                  <span>Fellowship Treasury</span>
-                  <span>Fellowship Salary</span>
-                </div>
+              <div>
+                <h3 className="text-sm font-semibold text-primary mb-4">Beneficiary split</h3>
+                <div className="space-y-4">
+                  <div className="flex justify-between text-xs text-secondary">
+                    <span>Fellowship Treasury</span>
+                    <span>Fellowship Salary</span>
+                  </div>
 
-                <Slider
-                  id="beneficiarySplit"
-                  value={state.treasurySplitPercent}
-                  onChange={(value) =>
-                    dispatch({ type: 'SET_TREASURY_SPLIT', payload: value })
-                  }
-                  min={0}
-                  max={100}
-                  step={1}
-                />
+                  <Slider
+                    id="beneficiarySplit"
+                    value={state.treasurySplitPercent}
+                    onChange={(value) =>
+                      dispatch({ type: 'SET_TREASURY_SPLIT', payload: value })
+                    }
+                    min={0}
+                    max={100}
+                    step={1}
+                  />
 
-                <div className="flex justify-between text-base font-semibold">
-                  <span className="text-primary">{state.treasurySplitPercent}%</span>
-                  <span className="text-primary">{100 - state.treasurySplitPercent}%</span>
+                  <div className="flex justify-between text-base font-semibold">
+                    <span className="text-primary">{state.treasurySplitPercent}%</span>
+                    <span className="text-primary">{100 - state.treasurySplitPercent}%</span>
+                  </div>
                 </div>
               </div>
-            </CardContent>
-          </Card>
-        </>
-      )}
+            </>
+          )}
+        </CardContent>
+      </Card>
 
       {hasErrors && (
         <Alert variant="error">

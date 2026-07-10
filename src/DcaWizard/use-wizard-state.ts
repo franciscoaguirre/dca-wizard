@@ -5,7 +5,7 @@
  */
 
 import { useReducer, useEffect } from 'react';
-import type { NetworkType, ProposalMode } from '../api/constants';
+import type { NetworkType, ProposalMode, ProposalOrigin } from '../api/constants';
 import type { DcaWizardInputs, DcaProposal } from '../governance/builder';
 import {
   DEFAULTS,
@@ -15,6 +15,7 @@ import {
 } from '../api/constants';
 import {
   buildDcaProposal,
+  deriveProposalMode,
 } from '../governance/builder';
 import { calculateNumberOfReturns } from '../governance/periodic-return';
 import { applyParamsToState, buildSearchParams } from './share-url';
@@ -25,6 +26,9 @@ import { applyParamsToState, buildSearchParams } from './share-url';
 export interface WizardState {
   network: NetworkType;
   mode: ProposalMode;
+  origin: ProposalOrigin;
+  dcaEnabled: boolean;
+  returnsEnabled: boolean;
 
   // Setup-mode inputs (stringified for controlled inputs)
   dotAmount: string;
@@ -59,6 +63,9 @@ export interface WizardState {
  */
 export type WizardAction =
   | { type: 'SET_MODE'; payload: ProposalMode }
+  | { type: 'SET_ORIGIN'; payload: ProposalOrigin }
+  | { type: 'SET_DCA_ENABLED'; payload: boolean }
+  | { type: 'SET_RETURNS_ENABLED'; payload: boolean }
   | { type: 'SET_DOT_AMOUNT'; payload: string }
   | { type: 'SET_HOLLAR_PER_RETURN'; payload: string }
   | { type: 'SET_DCA_FREQUENCY'; payload: number }
@@ -82,6 +89,9 @@ export type WizardAction =
 const initialState: WizardState = {
   network: 'polkadot',
   mode: 'both',
+  origin: 'fellowship',
+  dcaEnabled: true,
+  returnsEnabled: true,
   dotAmount: '',
   hollarAmountPerReturn: '',
   dcaFrequencyBlocks: DEFAULTS.DCA_FREQUENCY_BLOCKS,
@@ -248,6 +258,17 @@ function updateFieldWithValidation<K extends ValidatableField>(
 }
 
 /**
+ * The DCA-off + returns-off combination produces no calls. Surface it as a
+ * general error so the form blocks progression.
+ */
+function validateCombination(dcaEnabled: boolean, returnsEnabled: boolean): string | null {
+  if (!dcaEnabled && !returnsEnabled) {
+    return 'Enable the DCA, automatic returns, or both to build a proposal.';
+  }
+  return null;
+}
+
+/**
  * Reducer
  */
 function wizardReducer(state: WizardState, action: WizardAction): WizardState {
@@ -256,6 +277,33 @@ function wizardReducer(state: WizardState, action: WizardAction): WizardState {
       // Re-validate all fields under the new mode.
       const nextState = { ...state, mode: action.payload };
       return { ...nextState, errors: validateAllFields(nextState) };
+    }
+
+    case 'SET_ORIGIN':
+      return { ...state, origin: action.payload };
+
+    case 'SET_DCA_ENABLED': {
+      const dcaEnabled = action.payload;
+      const mode = deriveProposalMode(dcaEnabled, state.returnsEnabled) ?? state.mode;
+      const nextState = { ...state, dcaEnabled, mode };
+      const errors = validateAllFields(nextState);
+      const combo = validateCombination(dcaEnabled, state.returnsEnabled);
+      return {
+        ...nextState,
+        errors: combo ? { ...errors, combination: combo } : errors,
+      };
+    }
+
+    case 'SET_RETURNS_ENABLED': {
+      const returnsEnabled = action.payload;
+      const mode = deriveProposalMode(state.dcaEnabled, returnsEnabled) ?? state.mode;
+      const nextState = { ...state, returnsEnabled, mode };
+      const errors = validateAllFields(nextState);
+      const combo = validateCombination(state.dcaEnabled, returnsEnabled);
+      return {
+        ...nextState,
+        errors: combo ? { ...errors, combination: combo } : errors,
+      };
     }
 
     case 'SET_DOT_AMOUNT':
@@ -395,6 +443,7 @@ export function useWizardState() {
         const inputs: DcaWizardInputs = {
           network: state.network,
           mode: state.mode,
+          origin: state.origin,
           dotAmount: state.mode !== 'return' ? parseDotAmount(state.dotAmount) : undefined,
           dcaFrequencyBlocks: state.mode !== 'return' ? state.dcaFrequencyBlocks : undefined,
           dcaDurationDays: state.mode !== 'return' ? state.dcaDurationDays : undefined,
@@ -420,6 +469,7 @@ export function useWizardState() {
     return () => clearTimeout(timer);
   }, [
     state.mode,
+    state.origin,
     state.dotAmount,
     state.hollarAmountPerReturn,
     state.dcaFrequencyBlocks,
