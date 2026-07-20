@@ -49,9 +49,13 @@ export function getTransactionBreakdown(
   if (mode !== 'return') {
     calls.push({
       name: 'Setup DCA',
-      pallet: isTreasury ? 'Utility → PolkadotXcm' : 'PolkadotXcm',
-      call: isTreasury ? 'dispatch_as(FT) → execute' : 'send → Asset Hub',
-      description: `Single V5 XCM: transfer ${dotAmountDisplay} DOT from Fellowship Treasury to its Hydration sovereign and start the DCA schedule (DOT → HOLLAR) in one inbound message`,
+      pallet: isTreasury ? 'PolkadotXcm → Collectives → PolkadotXcm' : 'PolkadotXcm',
+      call: isTreasury
+        ? 'send → Transact(Superuser) → dispatch_as(Architects) → send'
+        : 'send → Asset Hub',
+      description: isTreasury
+        ? `Root routes through Collectives, re-entering the Fellowship Architects origin: a single V5 XCM transfers ${dotAmountDisplay} DOT from the Fellowship Treasury account (funded by the Treasury spend above) to its Hydration sovereign and starts the DCA schedule (DOT → HOLLAR) in one inbound message`
+        : `Single V5 XCM: transfer ${dotAmountDisplay} DOT from Fellowship Treasury to its Hydration sovereign and start the DCA schedule (DOT → HOLLAR) in one inbound message`,
       timing: 'Immediate',
     });
   }
@@ -59,11 +63,11 @@ export function getTransactionBreakdown(
   if (mode !== 'setup') {
     calls.push({
       name: 'Periodic Returns',
-      pallet: isTreasury ? 'Scheduler → Utility → PolkadotXcm' : 'Scheduler → PolkadotXcm',
+      pallet: isTreasury ? 'PolkadotXcm → Collectives → Scheduler' : 'Scheduler → PolkadotXcm',
       call: isTreasury
-        ? 'schedule_after(periodic) → dispatch_as(FT) → execute'
+        ? 'send → Transact(Superuser) → dispatch_as(Architects) → schedule_after(periodic) → send'
         : 'schedule_after(periodic) → send → Asset Hub',
-      description: `XCM (AH → Hydration → AH) returning HOLLAR to Fellowship Treasury (${inputs.treasurySplitPercent ?? 0}%) / Salary (${inputs.salarySplitPercent ?? 0}%) every ${inputs.returnFrequencyDays ?? 0} days, ${inputs.numberOfReturns ?? 0} times`,
+      description: `XCM (AH → Hydration → AH) returning HOLLAR to Fellowship Treasury (${inputs.treasurySplitPercent ?? 0}%) / Salary (${inputs.salarySplitPercent ?? 0}%) every ${inputs.returnFrequencyDays ?? 0} days, ${inputs.numberOfReturns ?? 0} times${isTreasury ? ' — scheduled on the Collectives scheduler, like the fellowship path' : ''}`,
       timing: `Every ${inputs.returnFrequencyDays ?? 0} days`,
     });
   }

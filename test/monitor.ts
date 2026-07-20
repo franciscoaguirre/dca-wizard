@@ -306,7 +306,12 @@ export async function monitorSchedulerEvents(
         block: Number(currentBlock),
         payload: event.payload,
       });
-      console.log(`[Block ${currentBlock}] Scheduler.Dispatched event`);
+      console.log(
+        `[Block ${currentBlock}] Scheduler.Dispatched: result=${JSON.stringify(
+          event.payload.result,
+          (_, v) => (typeof v === "bigint" ? v.toString() : v)
+        )}`
+      );
     }
 
     await clients.ahClient._request("dev_newBlock", [{ count: 1 }]);
@@ -364,6 +369,70 @@ export async function monitorCollectivesSchedulerEvents(
       }
     } catch {
       // Event may not exist
+    }
+  }
+
+  return events;
+}
+
+/**
+ * Advance Collectives blocks while logging inbound XCM processing
+ * (MessageQueue.Processed), outbound sends (PolkadotXcm.Sent), and scheduler
+ * activity (Scheduler.Scheduled). Used by the treasury path, whose Superuser
+ * Transacts arrive from Asset Hub and re-enter the fellowship flow here.
+ */
+export async function monitorCollectivesXcmEvents(
+  clients: ChopsticksClients,
+  count: number
+): Promise<Array<{ type: string; block: number; payload: unknown }>> {
+  const events: Array<{ type: string; block: number; payload: unknown }> = [];
+
+  for (let i = 0; i < count; i++) {
+    await advanceCollectivesBlocks(clients, 1);
+    const currentBlock = await clients.collectivesApi.query.System.Number.getValue();
+
+    try {
+      const processedEvents =
+        await clients.collectivesApi.event.MessageQueue.Processed.pull();
+      for (const event of processedEvents) {
+        events.push({
+          type: "MessageQueue.Processed",
+          block: Number(currentBlock),
+          payload: event.payload,
+        });
+        console.log(
+          `  [Collectives block ${currentBlock}] MessageQueue.Processed: success=${event.payload.success}`
+        );
+      }
+    } catch {
+      // Event may not exist
+    }
+
+    try {
+      const sentEvents = await clients.collectivesApi.event.PolkadotXcm.Sent.pull();
+      for (const event of sentEvents) {
+        events.push({
+          type: "PolkadotXcm.Sent",
+          block: Number(currentBlock),
+          payload: event.payload,
+        });
+        console.log(`  [Collectives block ${currentBlock}] PolkadotXcm.Sent`);
+      }
+    } catch {
+      // Event may not exist
+    }
+
+    const scheduledEvents =
+      await clients.collectivesApi.event.Scheduler.Scheduled.pull();
+    for (const event of scheduledEvents) {
+      events.push({
+        type: "Scheduler.Scheduled",
+        block: Number(currentBlock),
+        payload: event.payload,
+      });
+      console.log(
+        `  [Collectives block ${currentBlock}] Scheduler.Scheduled (periodic return)`
+      );
     }
   }
 

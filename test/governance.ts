@@ -96,20 +96,39 @@ export async function getPreimage(
  * Execute a governance call via scheduler storage manipulation
  * This injects the call directly into the scheduler with Root origin
  */
-export async function executeGovernanceCall(
+/**
+ * Inject one scheduled call into the Asset Hub scheduler agenda with a Root
+ * origin, and set `IncompleteSince` so the scheduler still services it after
+ * `now` has moved past the target block.
+ *
+ * Post-AHM the Asset Hub scheduler keys its agenda on the *relay* chain block
+ * number (its BlockNumberProvider), so we schedule at `LastRelayChainBlockNumber`
+ * and mark `IncompleteSince` to the same block. `service_agendas` then processes
+ * the range `[IncompleteSince, now]`, which includes our entry. Without
+ * `IncompleteSince`, only `agenda[now]` is serviced and an entry injected at the
+ * current block is silently skipped on the next block — the reason nothing
+ * dispatched before.
+ *
+ * The stored agenda is read back and logged so a missing/misplaced entry is
+ * visible immediately.
+ */
+async function injectAhSchedulerCall(
   clients: ChopsticksClients,
-  preimageHash: string,
-  callSize: number
-) {
-  console.log("Executing governance call via scheduler storage manipulation...");
+  scheduledCall: unknown
+): Promise<{ executeAtBlock: number }> {
+  const relayNow = Number(
+    await clients.ahApi.query.ParachainSystem.LastRelayChainBlockNumber.getValue()
+  );
+  const localNow = Number(await clients.ahApi.query.System.Number.getValue());
+  const executeAtBlock = relayNow;
 
-  // Get current relay chain block number to schedule execution
-  const executeAtBlock =
-    await clients.ahApi.query.ParachainSystem.LastRelayChainBlockNumber.getValue();
+  console.log(
+    `  Block numbers on Asset Hub — local System.Number=${localNow}, relay LastRelayChainBlockNumber=${relayNow}`
+  );
+  console.log(
+    `  Injecting agenda at relay block ${executeAtBlock} with IncompleteSince=${executeAtBlock} (Root origin)`
+  );
 
-  console.log(`Scheduling governance execution at relay block ${executeAtBlock}`);
-
-  // Use dev_setStorage to add this to the scheduler agenda
   await clients.ahClient._request("dev_setStorage", [
     {
       scheduler: {
@@ -118,28 +137,49 @@ export async function executeGovernanceCall(
             [executeAtBlock],
             [
               {
-                call: {
-                  Lookup: {
-                    hash: preimageHash,
-                    len: callSize,
-                  },
-                },
-                origin: {
-                  system: "Root",
-                },
+                call: scheduledCall,
+                origin: { system: "Root" },
               },
             ],
           ],
         ],
+        incompleteSince: executeAtBlock,
       },
     },
   ]);
 
-  console.log(`Governance call scheduled for execution at block ${executeAtBlock}`);
+  // Read the agenda back so a missing entry (wrong storage shape or block key)
+  // is obvious rather than silently producing no Dispatched event.
+  const agenda = await clients.ahApi.query.Scheduler.Agenda.getValue(executeAtBlock);
+  console.log(`  Agenda at relay block ${executeAtBlock}: ${agenda.length} entry(ies) stored`);
+  for (const entry of agenda) {
+    if (entry) {
+      console.log(
+        `    stored entry: call.type=${entry.call?.type}, origin=${JSON.stringify(
+          entry.origin,
+          (_, v) => (typeof v === "bigint" ? v.toString() : v)
+        )}`
+      );
+    }
+  }
+  if (agenda.length === 0) {
+    console.log(
+      "  WARNING: no agenda entry was stored. The dev_setStorage shape may not match this runtime's Scheduler.Agenda, or the block key is wrong."
+    );
+  }
 
-  return {
-    executeAtBlock,
-  };
+  return { executeAtBlock };
+}
+
+export async function executeGovernanceCall(
+  clients: ChopsticksClients,
+  preimageHash: string,
+  callSize: number
+) {
+  console.log("Injecting governance call into Asset Hub scheduler (Root, Lookup)...");
+  return injectAhSchedulerCall(clients, {
+    Lookup: { hash: preimageHash, len: callSize },
+  });
 }
 
 /**
@@ -150,40 +190,10 @@ export async function executeCallDirectly(
   clients: ChopsticksClients,
   encodedCall: Binary
 ) {
-  console.log("Executing call directly via scheduler storage manipulation...");
-
-  const executeAtBlock =
-    await clients.ahApi.query.ParachainSystem.LastRelayChainBlockNumber.getValue();
-
-  console.log(`Scheduling direct execution at relay block ${executeAtBlock}`);
-
-  await clients.ahClient._request("dev_setStorage", [
-    {
-      scheduler: {
-        agenda: [
-          [
-            [executeAtBlock],
-            [
-              {
-                call: {
-                  Inline: encodedCall.asHex(),
-                },
-                origin: {
-                  system: "Root",
-                },
-              },
-            ],
-          ],
-        ],
-      },
-    },
-  ]);
-
-  console.log(`Call scheduled for direct execution at block ${executeAtBlock}`);
-
-  return {
-    executeAtBlock,
-  };
+  console.log("Injecting call into Asset Hub scheduler (Root, Inline)...");
+  return injectAhSchedulerCall(clients, {
+    Inline: encodedCall.asHex(),
+  });
 }
 
 /**

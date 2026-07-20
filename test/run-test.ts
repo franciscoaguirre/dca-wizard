@@ -22,10 +22,14 @@ import {
   advanceCollectivesBlocks,
   fundAliceAccount,
   fundTreasuryAccount,
+  fundMainTreasuryAccount,
   type ChopsticksClients,
 } from "./setup";
 import {
   executeCollectivesBatchCall,
+  executeCallDirectly,
+  executeGovernanceCall,
+  processCallForExecution,
 } from "./governance";
 import {
   waitForDcaScheduleId,
@@ -34,25 +38,32 @@ import {
   printTestSummary,
   monitorSchedulerEvents,
   monitorCollectivesSchedulerEvents,
+  monitorCollectivesXcmEvents,
 } from "./monitor";
 import { ACCOUNTS, TREASURY_FUND_AMOUNT } from "./constants";
+import { Binary } from "polkadot-api";
+import { XcmVersionedLocation } from "@polkadot-api/descriptors";
+import { fellowshipTreasuryPalletLocationV5 } from "../src/governance/xcm-messages";
 
 // Parse command line arguments
-function parseArgs(): { callHex: string | null; help: boolean } {
+function parseArgs(): { callHex: string | null; help: boolean; root: boolean } {
   const args = process.argv.slice(2);
   let callHex: string | null = null;
   let help = false;
+  let root = false;
 
   for (let i = 0; i < args.length; i++) {
     if (args[i] === "--call" && args[i + 1]) {
       callHex = args[i + 1];
       i++;
+    } else if (args[i] === "--root") {
+      root = true;
     } else if (args[i] === "--help" || args[i] === "-h") {
       help = true;
     }
   }
 
-  return { callHex, help };
+  return { callHex, help, root };
 }
 
 function printUsage() {
@@ -65,6 +76,9 @@ Usage:
 
 Options:
   --call <hex>    Hex-encoded batch call to execute (with or without 0x prefix)
+  --root          Inject the call into the Asset Hub scheduler with system Root
+                  origin (treasury-origin path). Default injects into the
+                  Collectives scheduler with the Fellowship Architects origin.
   --help, -h      Show this help message
 
 Prerequisites:
@@ -76,8 +90,11 @@ Prerequisites:
   Terminal 4: npx @acala-network/chopsticks@latest --config test/chopsticks/collectives.yml
 
 Examples:
-  # Run with a batch call from the DCA wizard
+  # Fellowship path: inject on Collectives with the Architects origin
   npx tsx test/run-test.ts --call "0x1f0801..."
+
+  # Treasury path: inject on Asset Hub with the Root origin
+  npx tsx test/run-test.ts --root --call "0x1f0801..."
 
   # Run without a call (just test connectivity)
   npx tsx test/run-test.ts
@@ -85,7 +102,7 @@ Examples:
 }
 
 async function main() {
-  const { callHex, help } = parseArgs();
+  const { callHex, help, root } = parseArgs();
 
   if (help) {
     printUsage();
@@ -94,7 +111,11 @@ async function main() {
 
   console.log("=".repeat(60));
   console.log("   DCA Wizard Chopsticks Test");
-  console.log("   Single Batched Proposal on Collectives");
+  console.log(
+    root
+      ? "   Treasury-origin batch on Asset Hub (Root)"
+      : "   Fellowship-origin batch on Collectives (Architects)"
+  );
   console.log("=".repeat(60));
 
   let clients: ChopsticksClients | undefined;
@@ -129,6 +150,101 @@ async function main() {
       : `0x${callHex}`;
 
     console.log(`Call hex: ${normalizedCallHex.slice(0, 66)}...`);
+
+    // Treasury-origin path: inject on Asset Hub with the Root origin.
+    if (root) {
+      console.log("\n[Root] Funding main Treasury account on Asset Hub...\n");
+      await fundMainTreasuryAccount(clients);
+      await printBalanceSnapshot(clients, "Initial (main Treasury funded)");
+
+      console.log(
+        "\n[Root · Step 4] Injecting call into Asset Hub scheduler with Root origin...\n"
+      );
+      const callData = Binary.fromHex(normalizedCallHex);
+      const callSize = callData.asBytes().length;
+      // Scheduler agenda entries hold Bounded<RuntimeCall>: Inline is capped at 128
+      // bytes (frame_support BoundedInline). A larger inline entry fails to decode at
+      // runtime and is silently skipped, so anything bigger needs preimage + Lookup.
+      if (callSize > 128) {
+        console.log(
+          `Call is ${callSize} bytes (>128) — storing preimage and scheduling a Lookup.`
+        );
+        const { hash, size } = await processCallForExecution(
+          clients,
+          normalizedCallHex
+        );
+        await executeGovernanceCall(clients, hash, size);
+      } else {
+        console.log(`Call is ${callSize} bytes — scheduling inline.`);
+        await executeCallDirectly(clients, callData);
+      }
+
+      console.log(
+        "\n[Root · Step 5] Advancing Asset Hub to execute the batch...\n"
+      );
+      const ahEvents = await monitorSchedulerEvents(clients, 3);
+      console.log(
+        `Found ${ahEvents.length} Scheduler.Dispatched event(s) on Asset Hub (see result= above)`
+      );
+
+      console.log(
+        "\n[Root · Step 6] Delivering Superuser Transacts to Collectives...\n"
+      );
+      const collectivesXcmEvents = await monitorCollectivesXcmEvents(clients, 3);
+      console.log(
+        `Found ${collectivesXcmEvents.length} XCM/scheduler event(s) on Collectives (expect MessageQueue.Processed, PolkadotXcm.Sent for setup, Scheduler.Scheduled for returns)`
+      );
+
+      console.log("\n[Root · Step 7] Propagating XCM across chains...\n");
+      await advanceAllBlocks(clients, 5);
+      await printBalanceSnapshot(clients, "After batch execution + XCM");
+
+      console.log(
+        "\n[Root · Step 8] Resolving Fellowship Treasury sovereign on Hydration...\n"
+      );
+      let dcaOwner: string = ACCOUNTS.FELLOWSHIP_TREASURY;
+      try {
+        const location = XcmVersionedLocation.V5(
+          fellowshipTreasuryPalletLocationV5("polkadot")
+        );
+        const converted =
+          await clients.hydrationApi.apis.LocationToAccountApi.convert_location(
+            location
+          );
+        if (converted.success && converted.value) {
+          dcaOwner = converted.value;
+        }
+        console.log(`DCA owner (Hydration sovereign): ${dcaOwner}`);
+      } catch (error) {
+        console.log(
+          `Could not resolve sovereign, falling back to ${dcaOwner}: ${error}`
+        );
+      }
+
+      console.log("\n[Root · Step 9] Monitoring for DCA on Hydration...\n");
+      try {
+        const dcaId = await waitForDcaScheduleId(clients, dcaOwner, 20);
+        console.log(`\nDCA Schedule created with ID: ${dcaId}`);
+        const dcaResult = await monitorDcaExecution(clients, [dcaId], 50);
+        printTestSummary(dcaResult);
+      } catch (error) {
+        console.log(`No DCA detected: ${error}`);
+      }
+
+      console.log("\n[Root · Step 10] Settling for periodic returns...\n");
+      // The periodic return is scheduled on the Collectives scheduler (same as the
+      // fellowship path), so advance Collectives far enough for a cycle to fire.
+      await advanceCollectivesBlocks(clients, 200);
+      await advanceAllBlocks(clients, 10);
+      await printBalanceSnapshot(clients, "Final Balances");
+      await getCurrentBlocks(clients);
+
+      console.log("\n" + "=".repeat(60));
+      console.log("   Root Test Complete");
+      console.log("=".repeat(60) + "\n");
+      await clients.cleanup();
+      process.exit(0);
+    }
 
     // Step 4: Inject batch call into Collectives scheduler with Architects origin
     console.log("\n[Step 4] Injecting batch call into Collectives scheduler...\n");

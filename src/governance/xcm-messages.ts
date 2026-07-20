@@ -12,6 +12,10 @@
  *      from that sovereign, then InitiateTransfer back to AH with HOLLAR as
  *      ReserveDeposit (Hydration is HOLLAR's reserve) and DOT as ReserveWithdraw.
  *
+ * The Collectives sends are dispatched with the Architects origin — directly by a
+ * Collectives referendum, or by the treasury path's buildSuperuserTransactXcm hop
+ * (AH Root → Transact(Superuser) → dispatch_as(Architects)).
+ *
  * Custody invariant: the DCA owner / DOT+HOLLAR custody account on Hydration is the
  * SS58 derivation of (1,[Parachain(collectives),PalletInstance(65)]) via Hydration's
  * LocationToAccountId. Hydration accepts the AliasOrigin to this target via
@@ -99,6 +103,36 @@ export const DOT_ASSET_ID_V5 = {
 };
 
 /**
+ * Wrap pre-encoded Collectives calls for delivery from an Asset Hub Root referendum:
+ * [UnpaidExecution, Transact(Superuser, call) × N].
+ *
+ * Collectives grants Superuser to Asset Hub's chain location (LocationAsSuperuser),
+ * so each Transact dispatches as Root there, and its Barrier allows UnpaidExecution
+ * from Asset Hub.
+ *
+ * One Transact per call — NOT a single batch_all — because Transact decodes its call
+ * with MAX_XCM_DECODE_DEPTH = 8 and the return leg (dispatch_as → schedule_after →
+ * send → nested return XCM) already sits at exactly that depth; a batch_all wrapper
+ * adds a Vec level and fails to decode. The executor halts at the first failed
+ * instruction, so ordering semantics match batch_all.
+ */
+export function buildSuperuserTransactXcm(encodedCalls: Binary[]): XcmVersionedXcm {
+  return XcmVersionedXcm.V5([
+    XcmV5Instruction.UnpaidExecution({
+      weight_limit: XcmV3WeightLimit.Unlimited(),
+      check_origin: undefined,
+    }),
+    ...encodedCalls.map((call) =>
+      XcmV5Instruction.Transact({
+        origin_kind: XcmV2OriginKind.Superuser(),
+        fallback_max_weight: undefined,
+        call,
+      }),
+    ),
+  ]);
+}
+
+/**
  * HOLLAR's canonical multilocation: (1, X2(Parachain(2034), GeneralIndex(222))).
  * Same shape as a reserve asset on Hydration AND as the foreign-asset id on AH.
  */
@@ -143,7 +177,6 @@ export function buildSetupXcm(
   dotTotalPlanck: bigint,
   hydrationFeePlanck: bigint,
   dcaCallEncoded: Binary,
-  withLeadingAlias: boolean = true,
 ): XcmVersionedXcm {
   if (hydrationFeePlanck <= 0n) {
     throw new Error('hydrationFeePlanck must be > 0 (PayFees needs a non-zero asset)');
@@ -153,7 +186,7 @@ export function buildSetupXcm(
   const hydrationParaId = getParachainId(network, 'HYDRATION');
 
   return XcmVersionedXcm.V5([
-    ...(withLeadingAlias ? [XcmV5Instruction.AliasOrigin(ftLocation)] : []),
+    XcmV5Instruction.AliasOrigin(ftLocation),
 
     XcmV5Instruction.UnpaidExecution({
       weight_limit: XcmV3WeightLimit.Unlimited(),
@@ -239,7 +272,6 @@ export function buildPeriodicReturnXcm(
   hydrationFee: bigint,
   ahReturnFee: bigint,
   treasurySplitPercent: number,
-  withLeadingAlias: boolean = true,
 ): XcmVersionedXcm {
   if (hollarAmountPerReturn <= 0n) {
     throw new Error('Cannot build return XCM: HOLLAR amount must be > 0');
@@ -292,7 +324,7 @@ export function buildPeriodicReturnXcm(
         : [sweepHollarTo(FELLOWSHIP_SALARY_ID)];
 
   return XcmVersionedXcm.V5([
-    ...(withLeadingAlias ? [XcmV5Instruction.AliasOrigin(ftLocation)] : []),
+    XcmV5Instruction.AliasOrigin(ftLocation),
 
     XcmV5Instruction.UnpaidExecution({
       weight_limit: XcmV3WeightLimit.Unlimited(),

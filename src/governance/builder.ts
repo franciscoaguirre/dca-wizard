@@ -8,8 +8,13 @@
  *              call (return XCM per cycle: AH → Hydration → AH)
  *   - both   : `Utility.batch_all` of [setup, return-scheduler] (2 calls)
  *
+ * The treasury origin wraps those same Collectives calls for an Asset Hub Root
+ * referendum: a Treasury transfer plus `PolkadotXcm.send(Collectives,
+ * Transact(Superuser, dispatch_as(Architects, <call>)))` — see encodeTreasuryBatchCall.
+ *
  * Custody account on Hydration is the Fellowship Treasury pallet sovereign — same
- * entity as the FT pallet on Collectives (and as the AliasOrigin target on AH).
+ * entity as the FT pallet on Collectives (and as the AliasOrigin target on AH) —
+ * for both proposal origins.
  */
 
 import type { NetworkType, ProposalMode, ProposalOrigin } from '../api/constants';
@@ -26,8 +31,8 @@ import { getAssetHubApi } from '../api/clients/dotAh';
 import {
   buildSetupXcm,
   buildPeriodicReturnXcm,
+  buildSuperuserTransactXcm,
   parachainLocationV5,
-  fellowshipTreasuryPalletLocationV5,
 } from './xcm-messages';
 import {
   getFellowshipTreasurySovereignOnHydration,
@@ -111,13 +116,6 @@ export interface DcaProposal {
     warnings: string[];
   };
 }
-
-// Weight ceiling for the local PolkadotXcm.execute of the setup/return message on
-// Asset Hub. Generous; the exact cost is validated in manual Chopsticks testing.
-const EXECUTE_MAX_WEIGHT = {
-  ref_time: 20_000_000_000n,
-  proof_size: 2_000_000n,
-} as const;
 
 // DOT buffer added to the treasury spend to cover the setup XCM hop fees.
 const SETUP_FEE_BUFFER_PLANCK = PER_HOP_FEE_PLANCK * 2n;
@@ -293,17 +291,14 @@ export async function buildDcaProposal(
 }
 
 /**
- * Encode the proposal call. Single-call modes return the call hex directly;
- * `both` mode wraps the two calls in `Utility.batch_all`.
+ * Build the Collectives-side calls that carry the Fellowship's authority:
+ *   - setup / both: `PolkadotXcm.send(Asset Hub, setup XCM)`
+ *   - both / return: `Scheduler.schedule_after(periodic, PolkadotXcm.send(AH, return XCM))`
+ * They dispatch with the Architects origin either directly from a Collectives
+ * referendum (fellowship path) or via `dispatch_as` from a Superuser Transact
+ * (treasury path), so both paths share the same bytes and the same FT-pallet custody.
  */
-export async function encodeBatchCall(
-  proposal: DcaProposal,
-  dotPriceInUsd: number,
-): Promise<string> {
-  if ((proposal.inputs.origin ?? 'fellowship') === 'treasury') {
-    return encodeTreasuryBatchCall(proposal, dotPriceInUsd);
-  }
-
+async function buildFellowshipTxs(proposal: DcaProposal, dotPriceInUsd: number) {
   const network = proposal.inputs.network;
   const collectivesApi = await getCollectivesApi(network);
   const assetHubDest = XcmVersionedLocation.V5(
@@ -369,6 +364,23 @@ export async function encodeBatchCall(
     mode !== 'setup' ? buildReturnTx() : null,
   ]).then((arr) => arr.filter((tx): tx is Tx => tx !== null));
 
+  return { collectivesApi, txCalls };
+}
+
+/**
+ * Encode the proposal call. Single-call modes return the call hex directly;
+ * `both` mode wraps the two calls in `Utility.batch_all`.
+ */
+export async function encodeBatchCall(
+  proposal: DcaProposal,
+  dotPriceInUsd: number,
+): Promise<string> {
+  if ((proposal.inputs.origin ?? 'fellowship') === 'treasury') {
+    return encodeTreasuryBatchCall(proposal, dotPriceInUsd);
+  }
+
+  const { collectivesApi, txCalls } = await buildFellowshipTxs(proposal, dotPriceInUsd);
+
   if (txCalls.length === 1) {
     return (await txCalls[0].getEncodedData()).asHex();
   }
@@ -381,10 +393,24 @@ export async function encodeBatchCall(
 
 /**
  * Encode the treasury-origin batch for submission as an OpenGov Root referendum
- * on Asset Hub. Composition follows the derived mode:
- *   - setup / both: dispatch_as(Treasury) transfer + dispatch_as(FT) execute(setup)
- *   - both / return: Scheduler.schedule_after(dispatch_as(FT) execute(return))
- * A single resulting call is returned directly; 2+ are wrapped in Utility.batch_all.
+ * on Asset Hub.
+ *
+ * Root cannot act as the Fellowship Treasury locally on Asset Hub:
+ * `PolkadotXcm.execute` only converts Signed origins (`ExecuteXcmOrigin` is
+ * `SignedToAccountId32`), and AH's aliasers only let the Fellowship Architects
+ * plurality (rank ≥ 4) alias into the FT pallet location
+ * (`FellowshipArchitectsAliases`). Root's authority is instead routed through
+ * Collectives, which grants Superuser to Asset Hub's chain location
+ * (`LocationAsSuperuser`): each Transact dispatches as Root there, and
+ * `dispatch_as(FellowshipOrigins::Architects)` re-enters the exact fellowship-path
+ * calls — same XCMs, same FT-pallet custody on Hydration, and the periodic return
+ * scheduled on the Collectives scheduler.
+ *
+ * Composition follows the derived mode:
+ *   - setup / both: dispatch_as(Treasury) → transfer  (pre-funds the FT account on AH)
+ *   - always:       PolkadotXcm.send(Collectives, [UnpaidExecution,
+ *                     Transact(Superuser, dispatch_as(Architects, <call>)) × 1..2])
+ * A single resulting call is returned directly; 2 are wrapped in Utility.batch_all.
  */
 async function encodeTreasuryBatchCall(
   proposal: DcaProposal,
@@ -394,110 +420,51 @@ async function encodeTreasuryBatchCall(
   const ahApi = await getAssetHubApi(network);
   const mode = proposal.inputs.mode;
 
-  // pallet_xcm Origin::Xcm(FT pallet location) — Root impersonates the FT pallet
-  // so the executed message needs no leading AliasOrigin.
-  const ftXcmOrigin = {
-    type: 'PolkadotXcm' as const,
-    value: {
-      type: 'Xcm' as const,
-      value: fellowshipTreasuryPalletLocationV5(network),
-    },
+  const { collectivesApi, txCalls } = await buildFellowshipTxs(proposal, dotPriceInUsd);
+
+  const architectsOrigin = {
+    type: 'FellowshipOrigins' as const,
+    value: { type: 'Architects' as const, value: undefined },
   };
 
+  // One Transact per fellowship call — buildSuperuserTransactXcm explains why they
+  // must not be combined into a single batch_all (XCM decode-depth limit).
+  const transactCalls = await Promise.all(
+    txCalls.map((tx) =>
+      collectivesApi.tx.Utility.dispatch_as({
+        as_origin: architectsOrigin as never,
+        call: tx.decodedCall,
+      }).getEncodedData(),
+    ),
+  );
+
+  const sendTx = ahApi.tx.PolkadotXcm.send({
+    dest: XcmVersionedLocation.V5(
+      parachainLocationV5(getParachainId(network, 'COLLECTIVES')),
+    ),
+    message: buildSuperuserTransactXcm(transactCalls),
+  });
+
+  if (mode === 'return') {
+    return (await sendTx.getEncodedData()).asHex();
+  }
+
+  // Treasury spend: dispatch_as(Treasury) → transfer DOT to the FT account on AH,
+  // pre-funding the setup XCM's WithdrawAsset plus hop fees.
   const treasurySignedOrigin = {
     type: 'system' as const,
     value: { type: 'Signed' as const, value: ACCOUNTS.MAIN_TREASURY },
   };
-
-  const includeSpendAndSetup = mode !== 'return';
-  const includeReturn = mode !== 'setup';
-
-  // Each entry keeps the tx (for the single-call fast path) and its decodedCall
-  // (for batch_all).
-  const txs: Array<{
-    decodedCall: unknown;
-    getEncodedData: () => Promise<{ asHex: () => string }>;
-  }> = [];
-
-  if (includeSpendAndSetup) {
-    // 1) Treasury spend: dispatch_as(Treasury) → transfer DOT to FT account on AH.
-    const spendTx = ahApi.tx.Utility.dispatch_as({
-      as_origin: treasurySignedOrigin as never,
-      call: ahApi.tx.Balances.transfer_keep_alive({
-        dest: MultiAddress.Id(ACCOUNTS.FELLOWSHIP_TREASURY),
-        value: proposal.inputs.dotAmount! + SETUP_FEE_BUFFER_PLANCK,
-      }).decodedCall,
-    });
-    txs.push(spendTx);
-
-    // 2) DCA setup: dispatch_as(FT) → PolkadotXcm.execute(setup XCM, no leading alias).
-    const dotPerTrade = proposal.calculations.dotPerTrade;
-    const dcaParams = calculateDcaParams(
-      network,
-      proposal.calculations.sovereignAccount,
-      proposal.inputs.dcaFrequencyBlocks!,
-      proposal.inputs.slippagePercent!,
-      dotPerTrade,
-      estimateHollarFromDot(dotPerTrade, dotPriceInUsd),
-    );
-    const dcaCallEncoded = await encodeDcaScheduleCall(network, dcaParams);
-    const setupXcm = buildSetupXcm(
-      network,
-      proposal.inputs.dotAmount!,
-      PER_HOP_FEE_PLANCK,
-      dcaCallEncoded,
-      false,
-    );
-    const setupTx = ahApi.tx.Utility.dispatch_as({
-      as_origin: ftXcmOrigin as never,
-      call: ahApi.tx.PolkadotXcm.execute({
-        message: setupXcm,
-        max_weight: EXECUTE_MAX_WEIGHT,
-      }).decodedCall,
-    });
-    txs.push(setupTx);
-  }
-
-  if (includeReturn) {
-    // 3) Periodic returns: Scheduler.schedule_after(dispatch_as(FT) → execute(return)).
-    const periodicReturnParams = calculatePeriodicReturnParams(
-      proposal.inputs.returnFrequencyDays!,
-      proposal.inputs.numberOfReturns!,
-      proposal.calculations.estimatedHollarPerReturn,
-    );
-    const returnXcm = buildPeriodicReturnXcm(
-      network,
-      periodicReturnParams.hollarAmountPerReturn,
-      PER_HOP_FEE_PLANCK,
-      PER_HOP_FEE_PLANCK,
-      proposal.inputs.treasurySplitPercent!,
-      false,
-    );
-    const returnDispatch = ahApi.tx.Utility.dispatch_as({
-      as_origin: ftXcmOrigin as never,
-      call: ahApi.tx.PolkadotXcm.execute({
-        message: returnXcm,
-        max_weight: EXECUTE_MAX_WEIGHT,
-      }).decodedCall,
-    });
-    const scheduledTx = ahApi.tx.Scheduler.schedule_after({
-      after: periodicReturnParams.initialDelayBlocks,
-      maybe_periodic: [
-        periodicReturnParams.periodBlocks,
-        periodicReturnParams.repetitions,
-      ] as [number, number],
-      priority: 128,
-      call: returnDispatch.decodedCall,
-    });
-    txs.push(scheduledTx);
-  }
-
-  if (txs.length === 1) {
-    return (await txs[0].getEncodedData()).asHex();
-  }
+  const spendTx = ahApi.tx.Utility.dispatch_as({
+    as_origin: treasurySignedOrigin as never,
+    call: ahApi.tx.Balances.transfer_keep_alive({
+      dest: MultiAddress.Id(ACCOUNTS.FELLOWSHIP_TREASURY),
+      value: proposal.inputs.dotAmount! + SETUP_FEE_BUFFER_PLANCK,
+    }).decodedCall,
+  });
 
   const batchCall = ahApi.tx.Utility.batch_all({
-    calls: txs.map((t) => t.decodedCall) as never,
+    calls: [spendTx.decodedCall, sendTx.decodedCall] as never,
   });
   return (await batchCall.getEncodedData()).asHex();
 }

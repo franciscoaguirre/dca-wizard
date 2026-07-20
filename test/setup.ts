@@ -238,3 +238,42 @@ export async function fundTreasuryAccount(
     `Treasury account funded with ${Number(amount) / Number(DOT_UNITS)} DOT`
   );
 }
+
+/**
+ * Fund the main Polkadot Treasury account on Asset Hub. The treasury-origin
+ * proposal's `dispatch_as(Treasury) → transfer` spends from this account, so it
+ * must hold enough DOT to cover the spend plus fees.
+ */
+export async function fundMainTreasuryAccount(
+  clients: ChopsticksClients,
+  amount: bigint = 10_000_000n * DOT_UNITS
+) {
+  console.log("Funding main Treasury account on Asset Hub...");
+
+  await clients.ahClient._request("dev_setStorage", [
+    {
+      system: {
+        account: [
+          [
+            [ACCOUNTS.MAIN_TREASURY],
+            {
+              nonce: 0,
+              consumers: 0,
+              providers: 1,
+              sufficients: 0,
+              data: {
+                free: amount.toString(),
+                reserved: "0",
+                frozen: "0",
+              },
+            },
+          ],
+        ],
+      },
+    },
+  ]);
+
+  console.log(
+    `Main Treasury funded with ${Number(amount) / Number(DOT_UNITS)} DOT`
+  );
+}
